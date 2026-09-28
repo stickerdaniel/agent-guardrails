@@ -21,6 +21,12 @@ from .support import ROOT, TOKEN, RemoteTestCase, git_environment
 _WORKFLOWS = ROOT / ".github" / "workflows"
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 _VERSION_COMMENT = re.compile(r" # v[0-9]+\.[0-9]+\.[0-9]+$")
+# This unmerged experiment compares two existing first-party commits, neither
+# a release. Only these exact references may use the truthful experiment label.
+_EXPERIMENT_PINS = {
+    "stickerdaniel/agent-guardrails/experiments/native-distribution@fdbd6f74ba752a43118a78bbd1f4efc2d7e2b1cf",
+    "stickerdaniel/agent-guardrails@40382e2107a899e428cad2ab6b1d3132c90d3dcf",
+}
 
 
 def _load(path) -> dict:
@@ -244,8 +250,9 @@ class CentralChecksTests(unittest.TestCase):
             {"reporter": "github-annotations", "filter_mode": "nofilter", "fail_level": "error"},
         )
 
-    def test_third_party_actions_are_pinned_by_sha_with_a_version(self) -> None:
-        for path in sorted(_WORKFLOWS.glob("*.yml")):
+    def _assert_workflow_pins(self, directory: Path) -> None:
+        paths = sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
+        for path in paths:
             steps = [
                 step
                 for job in _load(path)["jobs"].values()
@@ -254,10 +261,45 @@ class CentralChecksTests(unittest.TestCase):
             ]
             text = path.read_text(encoding="utf-8").splitlines()
             for step in steps:
-                with self.subTest(workflow=path.name, uses=step["uses"]):
-                    self.assertRegex(step["uses"], _PINNED.pattern + "$")
-                    line = next(line for line in text if f"uses: {step['uses']}" in line)
-                    self.assertRegex(line, _VERSION_COMMENT)
+                self.assertRegex(step["uses"], _PINNED.pattern + "$", path.name)
+                line = next(line for line in text if f"uses: {step['uses']}" in line)
+                if (
+                    path.name == "native-distribution-transfer.yml"
+                    and step["uses"] in _EXPERIMENT_PINS
+                ):
+                    self.assertTrue(line.endswith(" # unmerged experiment"), line)
+                else:
+                    self.assertRegex(line, _VERSION_COMMENT, path.name)
+
+    def test_third_party_actions_are_pinned_by_sha_with_a_version(self) -> None:
+        self._assert_workflow_pins(_WORKFLOWS)
+
+    def test_experimental_pin_exception_is_exact_and_checks_yaml_too(self) -> None:
+        own = sorted(_EXPERIMENT_PINS)[0]
+        external = "actions/checkout@" + "a" * 40
+        cases = [
+            ("native-distribution-transfer.yml", own, "unmerged experiment", True),
+            ("native-distribution-transfer.yml", own.rsplit("@", 1)[0] + "@main", "unmerged experiment", False),
+            ("native-distribution-transfer.yml", own[:-1] + "0", "unmerged experiment", False),
+            ("native-distribution-transfer.yml", external, "unmerged experiment", False),
+            ("other.yml", own, "unmerged experiment", False),
+            ("other.yaml", "actions/checkout@main", "v7.0.1", False),
+            ("other.yaml", external, "v7.0.1", True),
+        ]
+        for filename, action, comment, accepted in cases:
+            with self.subTest(filename=filename, action=action, accepted=accepted):
+                with tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary)
+                    (directory / filename).write_text(
+                        "jobs:\n  check:\n    steps:\n"
+                        f"      - uses: {action} # {comment}\n",
+                        encoding="utf-8",
+                    )
+                    if accepted:
+                        self._assert_workflow_pins(directory)
+                    else:
+                        with self.assertRaises(AssertionError):
+                            self._assert_workflow_pins(directory)
 
 
 if __name__ == "__main__":
