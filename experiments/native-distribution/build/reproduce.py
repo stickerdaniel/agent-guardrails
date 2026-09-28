@@ -12,6 +12,12 @@ agreed build instead of comparing, for preparing a commit locally.
 
 Exit status 1 on any difference or failure; nothing is skipped. The image is
 pulled by digest before the network-less builds when it is not present.
+
+A build runs in a container this invocation owns (run_owned): created with a
+fresh name and label, started by the ID docker create returned, and removed
+by that ID once it ends, fails or overruns its deadline. A deadline kills the
+Docker client, never by itself the container, so removal is what ends a
+stuck build. Nothing is removed by name or by a broad filter.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -32,7 +39,23 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import verify_artifacts  # noqa: E402
 
-BUILD_DEADLINE_S = 1800  # an emulated build is slow; a stuck one still ends
+BUILD_DEADLINE_S = 1800  # an emulated build is slow; a stuck one is removed here
+CREATE_DEADLINE_S = 120
+CLEANUP_DEADLINE_S = 60  # for each docker call cleanup makes
+OWNER_LABEL = "io.github.stickerdaniel.agx-reproduce"
+DOCKER = "docker"
+_CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
+
+
+class OwnedRunError(Exception):
+    """A run in an owned container failed. problems lists the failure first,
+    then anything cleanup could not do; container is the ID, if one was
+    created."""
+
+    def __init__(self, problems: list[str], container: str | None) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
+        self.container = container
 
 
 def sha256(data: bytes) -> str:
@@ -40,7 +63,94 @@ def sha256(data: bytes) -> str:
 
 
 def docker(*args: str, deadline: float) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=deadline)
+    """One Docker client call. On timeout, subprocess.run kills and reaps the
+    client; whatever the daemon runs for it is the caller's to remove."""
+    return subprocess.run([DOCKER, *args], capture_output=True, text=True, timeout=deadline)
+
+
+def _bounded(problems: list[str], what: str, *args: str) -> subprocess.CompletedProcess | None:
+    try:
+        return docker(*args, deadline=CLEANUP_DEADLINE_S)
+    except subprocess.TimeoutExpired:
+        problems.append(f"{what} did not finish within {CLEANUP_DEADLINE_S}s")
+        return None
+
+
+def remove_owned(token: str, name: str, container: str | None) -> list[str]:
+    """Removes the containers this token owns and returns what went wrong.
+
+    The ID docker create returned, plus any container carrying exactly this
+    token's label (a create that timed out may still have made one). Each is
+    removed only after its name and label prove it ours, by ID, and then
+    checked to be gone."""
+    problems: list[str] = []
+    owned = [container] if container else []
+    listed = _bounded(
+        problems, "listing this token's containers",
+        "ps", "--all", "--quiet", "--no-trunc", "--filter", f"label={OWNER_LABEL}={token}",
+    )
+    if listed is not None and listed.returncode == 0:
+        owned += [line for line in listed.stdout.split() if line not in owned]
+    elif listed is not None:
+        problems.append(f"cannot list this token's containers: {listed.stderr.strip()}")
+    for candidate in owned:
+        if not _CONTAINER_ID.fullmatch(candidate):
+            problems.append(f"not removing {candidate!r}: not a full container ID")
+            continue
+        shown = _bounded(
+            problems, f"inspecting {candidate}",
+            "inspect", "--type", "container", "--format",
+            f'{{{{.Name}}}}\t{{{{index .Config.Labels "{OWNER_LABEL}"}}}}', candidate,
+        )
+        if shown is None:
+            continue
+        if shown.returncode != 0:
+            problems.append(f"cannot inspect {candidate}: {shown.stderr.strip()}")
+            continue
+        if shown.stdout.strip() != f"/{name}\t{token}":
+            problems.append(f"not removing {candidate}: its name and label are not this invocation's")
+            continue
+        removed = _bounded(problems, f"removing {candidate}", "rm", "--force", candidate)
+        if removed is not None and removed.returncode != 0:
+            problems.append(f"cannot remove {candidate}: {removed.stderr.strip()}")
+        still = _bounded(problems, f"checking that {candidate} is gone", "inspect", "--type", "container", candidate)
+        if still is not None and still.returncode == 0:
+            problems.append(f"{candidate} still exists after removal")
+    return problems
+
+
+def run_owned(
+    options: list[str], image: str, argv: list[str], deadline: float, token: str | None = None
+) -> subprocess.CompletedProcess:
+    """argv in a new container of image, which this call creates, waits for
+    at most deadline seconds and always removes. Returns the attached
+    `docker start` result, whose status is the container's. Raises
+    OwnedRunError when the run could not complete or cleanup failed."""
+    token = token or secrets.token_hex(12)
+    name = f"agx-reproduce-{token}"
+    container = None
+    problems: list[str] = []
+    result = None
+    try:
+        created = docker(
+            "create", "--name", name, "--label", f"{OWNER_LABEL}={token}", *options, image, *argv,
+            deadline=CREATE_DEADLINE_S,
+        )
+        if created.returncode != 0:
+            problems.append(f"docker create failed: {created.stderr.strip()}")
+        elif not _CONTAINER_ID.fullmatch(created.stdout.strip()):
+            problems.append(f"docker create printed no container ID: {created.stdout.strip()!r}")
+        else:
+            container = created.stdout.strip()
+            result = docker("start", "--attach", container, deadline=deadline)
+    except subprocess.TimeoutExpired as expired:
+        what = "docker create" if container is None else "the container"
+        problems.append(f"{what} did not finish within {expired.timeout:g}s")
+    finally:
+        problems += remove_owned(token, name, container)
+    if problems:
+        raise OwnedRunError(problems, container)
+    return result
 
 
 def ensure_image(image: str, platform: str) -> str:
@@ -75,18 +185,22 @@ def build(recipe: dict, target: dict, work_root: str) -> dict:
         "AGX_SOURCE_ROOT": settings["source_root"],
         "AGX_LINK_SELF_CONTAINED": settings["link_self_contained"],
     }
-    command = [
-        "run", "--rm", "--network", "none", "--platform", target["platform"],
+    options = [
+        "--network", "none", "--platform", target["platform"],
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{source}:{mount_in}:ro",
         "-v", f"{output}:{mount_out}",
         "-v", f"{os.path.join(HERE, 'build-in-image.sh')}:/agx-recipe/build-in-image.sh:ro",
-        target["image"],
+    ]
+    argv = [
         "env", "-i", *(f"{name}={value}" for name, value in environment.items()),
         "/bin/sh", "/agx-recipe/build-in-image.sh", mount_in, mount_out,
     ]
     started = time.monotonic()
-    result = docker(*command, deadline=BUILD_DEADLINE_S)
+    try:
+        result = run_owned(options, target["image"], argv, BUILD_DEADLINE_S)
+    except OwnedRunError as error:
+        raise SystemExit(f"reproduce: build in {base} failed: {error}") from None
     elapsed = time.monotonic() - started
     if result.returncode != 0:
         raise SystemExit(f"reproduce: build in {base} failed:\n{result.stdout}\n{result.stderr}")

@@ -22,11 +22,13 @@ _WORKFLOWS = ROOT / ".github" / "workflows"
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 _VERSION_COMMENT = re.compile(r" # v[0-9]+\.[0-9]+\.[0-9]+$")
 # This unmerged experiment compares two existing first-party commits, neither
-# a release. Only these exact references may use the truthful experiment label.
+# a release. Only these exact references, and only in these two named
+# workflows, may use the truthful experiment label.
 _EXPERIMENT_PINS = {
     "stickerdaniel/agent-guardrails/experiments/native-distribution@fdbd6f74ba752a43118a78bbd1f4efc2d7e2b1cf",
     "stickerdaniel/agent-guardrails@40382e2107a899e428cad2ab6b1d3132c90d3dcf",
 }
+_EXPERIMENT_WORKFLOWS = {"native-distribution-transfer.yml", "native-distribution-total.yml"}
 
 
 def _load(path) -> dict:
@@ -263,10 +265,7 @@ class CentralChecksTests(unittest.TestCase):
             for step in steps:
                 self.assertRegex(step["uses"], _PINNED.pattern + "$", path.name)
                 line = next(line for line in text if f"uses: {step['uses']}" in line)
-                if (
-                    path.name == "native-distribution-transfer.yml"
-                    and step["uses"] in _EXPERIMENT_PINS
-                ):
+                if path.name in _EXPERIMENT_WORKFLOWS and step["uses"] in _EXPERIMENT_PINS:
                     self.assertTrue(line.endswith(" # unmerged experiment"), line)
                 else:
                     self.assertRegex(line, _VERSION_COMMENT, path.name)
@@ -282,6 +281,10 @@ class CentralChecksTests(unittest.TestCase):
             ("native-distribution-transfer.yml", own.rsplit("@", 1)[0] + "@main", "unmerged experiment", False),
             ("native-distribution-transfer.yml", own[:-1] + "0", "unmerged experiment", False),
             ("native-distribution-transfer.yml", external, "unmerged experiment", False),
+            ("native-distribution-total.yml", own, "unmerged experiment", True),
+            ("native-distribution-total.yml", own[:-1] + "0", "unmerged experiment", False),
+            ("native-distribution-total.yml", external, "unmerged experiment", False),
+            ("native-distribution-total.yaml", own, "unmerged experiment", False),
             ("other.yml", own, "unmerged experiment", False),
             ("other.yaml", "actions/checkout@main", "v7.0.1", False),
             ("other.yaml", external, "v7.0.1", True),
