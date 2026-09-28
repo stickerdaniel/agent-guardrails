@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import tracemalloc
 import unittest
@@ -342,6 +343,63 @@ class NewSideContractTests(_FakeGitTestCase):
                         self.assertIn("::error title=agent-guardrails::cannot parse the diff\n", stdout)
                         self.assertNotIn("checked 1 commit", stdout)
 
+    def test_content_change_shown_as_none_fails_in_either_mode(self) -> None:
+        # Real git, except for the patch between base and head where a test
+        # writes one. plain.md only became executable, so its old hidden
+        # character is not new; the other two files gained one.
+        script = (
+            'case " $* " in *" -U0 "*" -- ")\n'
+            "  if [ -f {bin}/main.patch ]; then exec {cat} {bin}/main.patch; fi;;\n"
+            "esac\n"
+            'exec {git} "$@"'
+        )
+        base = self.remote.commit(
+            "Base", files={"plain.md": "a\u200bb\n", "x.png": b"PNG\0", "y.md": "old\n"}
+        )
+        self.remote.push(base, "refs/heads/main")
+        self.remote.base = base
+        for name in ("plain.md", "y.md"):
+            (self.remote.work / name).chmod(0o755)
+            self.remote.git("add", name)
+        head = self.remote.commit(
+            "Change", files={"x.png": "new\u200btext\n", "y.md": "new\u200bline\n"}
+        )
+        path = self._fake_git(script, "cat", "git")
+        plain = "diff --git a/plain.md b/plain.md\nold mode 100644\nnew mode 100755\n"
+        x_binary = "diff --git a/x.png b/x.png\nBinary files a/x.png and b/x.png differ\n"
+        y_modes = "diff --git a/y.md b/y.md\nold mode 100644\nnew mode 100755\n"
+        y_lines = "@@ -1 +1 @@\n-old\n+new\u200bline\n"
+        patches = {
+            "real git": None,
+            "complete": plain + x_binary + y_modes + y_lines,
+            "binary to text, header only": plain + "diff --git a/x.png b/x.png\n" + y_modes + y_lines,
+            "mode and content, modes only": plain + x_binary + y_modes,
+        }
+        for name, patch in patches.items():
+            main_patch = self.remote.root / "fake-bin" / "main.patch"
+            if patch is None:
+                main_patch.unlink(missing_ok=True)
+            else:
+                main_patch.write_text(patch, encoding="utf-8")
+            for mode in ("error", "warn"):
+                with self.subTest(name, mode=mode):
+                    code, stdout, _ = self._main(head, mode, PATH=path)
+                    if name in ("real git", "complete"):
+                        severity = "error" if mode == "error" else "warning"
+                        self.assertEqual(code, 1 if mode == "error" else 0, stdout)
+                        for changed in ("x.png", "y.md"):
+                            self.assertIn(
+                                f"::{severity} file={changed},line=1,title=Invisible character::",
+                                stdout,
+                            )
+                        self.assertNotIn("plain.md", stdout)
+                        self.assertIn("checked 1 commit, 3 changed files", stdout)
+                    else:
+                        self.assertEqual(code, 1, stdout)
+                        self.assertIn("::error title=agent-guardrails::cannot parse the diff\n", stdout)
+                        self.assertNotIn("checked 1 commit", stdout)
+
+
 class AcquisitionLimitTests(_FakeGitTestCase):
     """The output and time limits hold while git runs, and running out fails
     the run in warn mode too."""
@@ -532,6 +590,58 @@ class AcquisitionLimitTests(_FakeGitTestCase):
         self.assertLess(elapsed, 15)
         self.assertEqual(at_removal, self._ENDED)
 
+    def test_overflow_signal_never_follows_the_reap(self) -> None:
+        # The stdout reader overflows, and its group signal is held until
+        # git is reaped, or for five seconds. Meanwhile the time limit runs
+        # out and the main thread cleans up. Once git is reaped its number
+        # can name another group, so no signal may come after.
+        script = (
+            'if [ "$1" = --version ]; then exec {head} -c 2000000 /dev/zero; fi\n'
+            'exec {git} "$@"'
+        )
+        reaped = threading.Event()
+        processes: list[subprocess.Popen] = []
+        signals: list[tuple[str, bool]] = []
+        real_popen, real_killpg = subprocess.Popen, os.killpg
+
+        def popen(argv, *args, **kwargs):
+            proc = real_popen(argv, *args, **kwargs)
+            # The action's git, not the test's own push.
+            if argv[0] == "git" and kwargs.get("start_new_session"):
+                processes.append(proc)
+                real_wait = proc.wait
+
+                def wait(*wait_args, **wait_kwargs):
+                    code = real_wait(*wait_args, **wait_kwargs)
+                    reaped.set()
+                    return code
+
+                proc.wait = wait
+            return proc
+
+        def killpg(group: int, signal_number: int) -> None:
+            main_thread = threading.current_thread() is threading.main_thread()
+            if not main_thread:
+                reaped.wait(5)
+            (proc,) = [p for p in processes if p.pid == group]
+            signals.append(("main" if main_thread else "reader", proc.returncode is not None))
+            # The test itself never signals a number that is free again.
+            if proc.returncode is None:
+                real_killpg(group, signal_number)
+
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        with mock.patch.object(gitdata, "OUTPUT_LIMIT", 2**20), mock.patch.object(
+            gitdata, "TIME_LIMIT", 2
+        ), mock.patch.object(gitdata.subprocess, "Popen", popen), mock.patch.object(
+            gitdata.os, "killpg", killpg
+        ):
+            code, stdout, elapsed = self._main(head, PATH=self._fake_git(script, "head", "git"))
+        self.assertEqual(code, 1, stdout)
+        self.assertIn("with git took longer than 2 seconds", stdout)
+        self.assertLess(elapsed, 12)
+        # Both signals were sent, the reader's too, and neither after the reap.
+        self.assertEqual(sorted(signals), [("main", False), ("reader", False)])
+
     def test_process_that_left_the_group_cannot_hold_the_run(self) -> None:
         # Out of the group's reach, it keeps both pipes open after git ends.
         # The readers are stopped, and only then are the pipes closed.
@@ -623,8 +733,18 @@ def _rows(*rows: bytes) -> bytes:
     return b"".join(row + b"\n" for row in rows)
 
 
-def _raw(status: str, old_mode: str, new_mode: str, path: bytes, blob: str = _BLOB) -> bytes:
-    old_blob = "0" * 40 if status == "A" else "2" * 40
+def _raw(
+    status: str,
+    old_mode: str,
+    new_mode: str,
+    path: bytes,
+    blob: str = _BLOB,
+    old_blob: str | None = None,
+) -> bytes:
+    """One raw listing entry. The old blob is another one than the new,
+    unless given."""
+    if old_blob is None:
+        old_blob = "0" * 40 if status == "A" else "2" * 40
     return f":{old_mode} {new_mode} {old_blob} {blob} {status}".encode() + b"\0" + path + b"\0"
 
 
@@ -677,14 +797,52 @@ class ReaderRecordTests(unittest.TestCase):
             with self.subTest(rows=len(last)), self.assertRaisesRegex(gitdata.GitError, "cannot parse"):
                 gitdata._changed_files(repo, "b" * 40, "h" * 40)
 
-    def _mode_change(self, new_side: bytes, blob: str = _BLOB) -> gitdata.ChangedFile:
+    def _mode_change(
+        self, new_side: bytes, blob: str = _BLOB, old_blob: str | None = None
+    ) -> gitdata.ChangedFile:
+        """A change git prints without a hunk. Only the mode changed when the
+        blob stayed the same, which it does unless old_blob says otherwise."""
         repo = _Canned(
-            _raw("M", "100644", "100755", b"x.md", blob),
+            _raw("M", "100644", "100755", b"x.md", blob, blob if old_blob is None else old_blob),
             _rows(b"diff --git a/x.md b/x.md", b"old mode 100644", b"new mode 100755"),
             new_side,
         )
         (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
         return changed
+
+    def test_content_change_without_a_hunk_fails(self) -> None:
+        # git's reading of the new blob is complete; the patch between the
+        # two sides says nothing about content that did change.
+        header = f"diff --git a/{_EMPTY_BLOB} b/{_BLOB}".encode()
+        whole = _rows(header, b"@@ -0,0 +1 @@", b"+changed")
+        cases = {
+            "mode and content changed": lambda: self._mode_change(whole, old_blob="2" * 40),
+            "content changed, header only": lambda: gitdata._changed_files(
+                _Canned(
+                    _raw("M", "100644", "100644", b"x.md"),
+                    _rows(b"diff --git a/x.md b/x.md"),
+                    whole,
+                ),
+                "b" * 40,
+                "h" * 40,
+            ),
+        }
+        for name, read in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(gitdata.GitError, "cannot parse the diff"):
+                read()
+
+    def test_raw_listing_with_an_invalid_old_object_fails(self) -> None:
+        # Its patch is complete, so only the old object is wrong.
+        patch = _rows(b"diff --git a/x.md b/x.md", b"@@ -1 +1 @@", b"-old", b"+new")
+        for old_blob, fails in (("2" * 40, False), ("z" * 40, True)):
+            repo = _Canned(_raw("M", "100644", "100644", b"x.md", old_blob=old_blob), patch)
+            with self.subTest(old_blob=old_blob):
+                if fails:
+                    with self.assertRaisesRegex(gitdata.GitError, "cannot parse the diff"):
+                        gitdata._changed_files(repo, "b" * 40, "h" * 40)
+                else:
+                    (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+                    self.assertEqual(changed.added, ((1, "new"),))
 
     def _binary_before(self, new_side: bytes) -> gitdata.ChangedFile:
         repo = _Canned(

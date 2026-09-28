@@ -220,8 +220,9 @@ class _Reader(threading.Thread):
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
-    """Kill git and every process it started, which share its group. git is
-    reaped only after this, so until then its number names no other group."""
+    """Kill git and every process it started, which share its group. Called
+    by the main thread and by the stdout reader on overflow, both before git
+    is reaped, so its number names no other group yet."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -314,12 +315,14 @@ class _Repository:
             timed_out = any(reader.is_alive() for reader in readers)
         finally:
             # On every way out, in this order: nothing git started is left
-            # running, git is reaped, the readers have stopped, and only then
+            # running, the readers have stopped, git is reaped, and only then
             # are the pipes closed. The caller removes the repository after.
+            # A stopped reader can no longer kill the group on overflow, so
+            # no signal goes out once git's number is free for reuse.
             _kill_group(proc)
-            proc.wait()
             for reader in readers:
                 reader.finish()
+            proc.wait()
             proc.stdout.close()
             proc.stderr.close()
         stdout, stderr = readers
@@ -485,12 +488,22 @@ def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]
 
     files = []
     index = 0
-    for status, old_mode, new_mode, blob, path in entries:
+    for status, old_mode, new_mode, old_blob, blob, path in entries:
         group = []
         while index < len(sections) and _names_path(sections[index].header, path):
             group.append(sections[index])
             index += 1
         if len(group) != (2 if status == "T" else 1):
+            raise GitError(_UNPARSABLE)
+        # A changed file without a hunk or a binary verdict is a mode change,
+        # which keeps the same blob. With another blob the content changed
+        # and the patch does not show it.
+        change = group[-1]
+        if (
+            status == "M"
+            and not (change.binary or change.in_hunks)
+            and old_blob != blob
+        ):
             raise GitError(_UNPARSABLE)
         # A new file, or a type change's creation, is compared with nothing
         # already. Without a hunk it has to be the empty blob. A submodule's
@@ -511,8 +524,9 @@ def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]
     return files
 
 
-def _raw_entries(raw: bytes) -> list[tuple[str, str, str, str, bytes]]:
-    """(status, old mode, new mode, new object, path) from diff --raw -z."""
+def _raw_entries(raw: bytes) -> list[tuple[str, str, str, str, str, bytes]]:
+    """(status, old mode, new mode, old object, new object, path) from
+    diff --raw -z."""
     fields = raw.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()
@@ -526,12 +540,13 @@ def _raw_entries(raw: bytes) -> list[tuple[str, str, str, str, bytes]]:
             or not parts[0].startswith(":")
             or not _MODE.fullmatch(parts[0][1:])
             or not _MODE.fullmatch(parts[1])
+            or not _SHA.fullmatch(parts[2])
             or not _SHA.fullmatch(parts[3])
             or parts[4] not in _STATUSES
             or not path
         ):
             raise GitError(_UNPARSABLE)
-        entries.append((parts[4], parts[0][1:], parts[1], parts[3], path))
+        entries.append((parts[4], parts[0][1:], parts[1], parts[2], parts[3], path))
     return entries
 
 
