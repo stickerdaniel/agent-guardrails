@@ -9,11 +9,17 @@
 # all of it. The launcher never execs the binary, so its own cleanup always
 # runs, and the binary's exit status is the launcher's.
 #
-# INT, TERM and HUP: the running child (gzip or the binary) gets TERM, since
-# a background child starts with INT ignored; the launcher waits for it to
-# end, removes the directory, and then dies of the signal it caught. SIGKILL
-# cannot be caught: after it the directory stays until the runner clears
-# RUNNER_TEMP.
+# INT, TERM and HUP are recorded, never forwarded: the launcher sends no
+# signal to any child. A child's PID can outlive the child, since bash reaps
+# it before wait returns, so a signal sent by number could reach an unrelated
+# process. The child that is running, gzip on a trusted asset or the drive on
+# a bounded capture, is left to end by itself. Then the launcher starts
+# nothing further, removes its directory, and dies of the first signal it
+# caught. Cancellation is therefore deferred, not prompt: a child that runs
+# long is bounded only by the job's timeout. Whether the runner also signals
+# the child directly, as part of the step's process tree, is not verified
+# here. SIGKILL cannot be caught: after it the directory stays until the
+# runner clears RUNNER_TEMP.
 #
 # Reads: AGX_CAPTURE, RUNNER_OS, RUNNER_TEMP, GITHUB_ACTION_PATH. No token.
 set -u
@@ -66,26 +72,22 @@ fail() {
     finish 1
 }
 
+# Records the first signal and counts every one. Deliberately signals no
+# one: see the header.
 # shellcheck disable=SC2329 # called from the traps below
 on_signal() {
     signals=$((signals + 1))
     if [ -z "$caught" ]; then
         caught=$1
     fi
-    if [ -n "$child" ]; then
-        kill -s TERM "$child" 2>/dev/null || :
-    fi
 }
 
-# Waits for the one running child and sets status to its exit status. A
-# trapped signal ends a wait early with 128+n; the loop then waits again, so
-# the directory is never removed while the child still runs.
+# Waits until the one running child has ended by itself and sets status to
+# its exit status. A trapped signal ends a wait early with 128+n; the loop
+# then waits again, so the directory is never removed while the child still
+# runs.
 await_child() {
     local seen
-    # A signal that arrived before $child was recorded found nothing to stop.
-    if [ -n "$caught" ]; then
-        kill -s TERM "$child" 2>/dev/null || :
-    fi
     while :; do
         seen=$signals
         wait "$child"
@@ -152,6 +154,13 @@ if [ ! -d "$runner_temp" ]; then
     fail "RUNNER_TEMP is not a directory"
 fi
 
+# A signal is checked before each stage starts: once one is recorded, no
+# directory, gzip or binary follows. One that arrives while a stage is being
+# started lets that stage run to its end, as above.
+if [ -n "$caught" ]; then
+    finish 1
+fi
+
 # The directory is ours only once mktemp has created it, and only then does
 # cleanup know its name. A signal before this point leaves nothing to remove,
 # or at most this one empty directory if it lands inside mktemp.
@@ -182,11 +191,11 @@ fi
 if ! chmod 0700 -- "$binary"; then
     fail "cannot mark the extracted binary executable"
 fi
-if [ -n "$caught" ]; then
-    finish 1
-fi
 if [ ! -x "$binary" ]; then
     fail "the extracted binary cannot be executed; RUNNER_TEMP may be mounted noexec"
+fi
+if [ -n "$caught" ]; then
+    finish 1
 fi
 
 "$binary" drive "$capture" &

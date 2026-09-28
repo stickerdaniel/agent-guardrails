@@ -150,7 +150,7 @@ class Sandbox:
             stdin=subprocess.DEVNULL,
         )
 
-    def start(self, **overrides: str) -> subprocess.Popen:
+    def start(self, launcher: Path = LAUNCHER, **overrides: str) -> subprocess.Popen:
         def default_signals() -> None:
             # A runner that cancels a job delivers INT; model one that has not
             # inherited an ignored INT.
@@ -158,7 +158,7 @@ class Sandbox:
                 signal.signal(sig, signal.SIG_DFL)
 
         return subprocess.Popen(
-            [BASH, "--noprofile", "--norc", "--", str(LAUNCHER)],
+            [BASH, "--noprofile", "--norc", "--", str(launcher)],
             env=self.env(**overrides),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -387,10 +387,65 @@ class CommittedAssetTests(LauncherTestCase):
         self.assertCleanedUp()
 
 
+REAL_GZIP = shutil.which("gzip", path="/usr/bin:/bin")
+
+
+def patient_child(tail: str) -> str:
+    """A stand-in child that must never be signalled. It records any TERM or
+    HUP it receives, waits until the test has signalled the launcher (at most
+    ten seconds), then reports whether the launcher's directory still exists,
+    records that it completed, and ends by itself with tail. It cannot
+    record INT: a background child starts with INT ignored."""
+    return (
+        "#!/bin/sh\n"
+        'out="$AGX_TEST_OUT"\n'
+        'trap \'echo TERM >> "$out/child-signals"\' TERM\n'
+        'trap \'echo HUP >> "$out/child-signals"\' HUP\n'
+        'echo $$ > "$out/child.pid"\n'
+        "n=0\n"
+        'while [ ! -e "$out/signalled" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done\n'
+        "sleep 0.3\n"
+        'if ls -d "$RUNNER_TEMP"/agent-guardrails-native.* >/dev/null 2>&1; then echo present; else echo gone; fi > "$out/probe"\n'
+        'echo done > "$out/completed"\n'
+        + tail
+    )
+
+
+# A test-only copy of launch.sh: every kill it issues and every signal its
+# traps record are logged, and at the wait AGX_TEST_PAUSE_AT names it pauses
+# after bash has reaped the child and before $child is cleared. In that
+# window the stored PID no longer belongs to the child, so any signal sent to
+# it could reach an unrelated process.
+_RECORD_ANCHOR = "    signals=$((signals + 1))\n"
+_RECORD = _RECORD_ANCHOR + '    echo "$1" >> "$AGX_TEST_OUT/recorded"\n'
+_TRACE_ANCHOR = "set -u\nset +x\n"
+_TRACE = (
+    "kill() {\n"
+    "    printf '%s\\n' \"$*\" >> \"$AGX_TEST_OUT/kills\"\n"
+    '    builtin kill "$@"\n'
+    "}\n"
+)
+_PAUSE_ANCHOR = '    done\n    child=""\n}'
+_PAUSE = (
+    "    done\n"
+    "    paused=$((${paused:-0} + 1))\n"
+    '    if [ "$paused" = "$AGX_TEST_PAUSE_AT" ]; then\n'
+    '        echo "$child" > "$AGX_TEST_OUT/reaped.pid"\n'
+    "        n=0\n"
+    '        while [ ! -e "$AGX_TEST_OUT/signalled" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done\n'
+    "    fi\n"
+    '    child=""\n'
+    "}"
+)
+
+
 class CancellationTests(LauncherTestCase):
-    """A catchable signal while gzip or the binary runs: the child is stopped
-    and reaped before the directory goes, then the launcher dies of the same
-    signal. Sent to the launcher alone, as a runner may."""
+    """Deferred cancellation. A catchable signal is recorded and never
+    forwarded: the running child ends by itself, the directory stays until it
+    has, no further stage starts, and the launcher then dies of the first
+    signal it caught. Signals go to the launcher alone. Whether a runner also
+    signals the child directly is not modelled here, and a child that ignores
+    signals is bounded only by the job's timeout."""
 
     def finish(self, process: subprocess.Popen) -> tuple[int, str, str]:
         try:
@@ -398,49 +453,118 @@ class CancellationTests(LauncherTestCase):
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
-            self.fail("the launcher did not end after the signal")
+            self.fail("the launcher did not end after its child had")
         return process.returncode, stdout, stderr
 
-    def test_a_signal_during_extraction(self) -> None:
+    def signal_and_release(self, process: subprocess.Popen, *signals: signal.Signals) -> None:
+        for sig in signals:
+            process.send_signal(sig)
+        (self.box.out / "signalled").write_text("yes\n")
+
+    def reset(self) -> None:
+        for name in ("child.pid", "child-signals", "signalled", "probe", "completed", "ran", "kills",
+                     "reaped.pid", "recorded"):
+            (self.box.out / name).unlink(missing_ok=True)
+
+    def assertChildFinishedUnsignalled(self) -> None:
+        self.assertEqual(wait_for(self.box.out / "completed"), "done")
+        self.assertEqual(wait_for(self.box.out / "probe"), "present", "the directory went before the child ended")
+        self.assertFalse((self.box.out / "child-signals").exists(), "the launcher signalled its child")
+        self.assertFalse(alive(int(wait_for(self.box.out / "child.pid"))))
+
+    def test_a_signal_during_extraction_waits_for_gzip_and_starts_nothing_more(self) -> None:
         self.box.script_asset(RECORDER)
-        pidfile = self.box.out / "gzip.pid"
-        self.box.tool("gzip", f'#!/bin/sh\necho $$ > "{pidfile}"\nexec sleep 30\n')
+        self.box.tool("gzip", patient_child(f'exec "{REAL_GZIP}" "$@"\n'))
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             with self.subTest(signal=sig.name):
-                pidfile.unlink(missing_ok=True)
+                self.reset()
                 process = self.box.start()
-                child = int(wait_for(pidfile))
-                self.assertTrue(alive(child))
-                process.send_signal(sig)
+                wait_for(self.box.out / "child.pid")
+                self.signal_and_release(process, sig)
                 code, stdout, stderr = self.finish(process)
                 self.assertEqual(code, -sig, stdout + stderr)
-                self.assertFalse(alive(child), "gzip outlived the launcher")
-                self.assertFalse(self.box.ran())
+                self.assertChildFinishedUnsignalled()
+                self.assertFalse(self.box.ran(), "the binary started after cancellation")
                 self.assertCleanedUp()
 
-    def test_a_signal_while_the_binary_runs(self) -> None:
-        pidfile = self.box.out / "binary.pid"
-        probe = self.box.out / "probe"
-        # On TERM the stand-in waits, then reports whether its directory
-        # still exists: it must, since the launcher may only remove it after
-        # the binary has ended.
-        self.box.script_asset(
-            "#!/bin/sh\n"
-            f'trap \'sleep 0.3; if [ -d "$(dirname "$0")" ]; then echo present; else echo gone; fi > "{probe}"; exit 143\' TERM\n'
-            f'echo $$ > "{pidfile}"\n'
-            "while :; do sleep 0.05; done\n"
-        )
+    def test_a_signal_while_the_binary_runs_waits_for_it_to_finish(self) -> None:
+        self.box.script_asset(patient_child("exit 0\n"))
         for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             with self.subTest(signal=sig.name):
-                pidfile.unlink(missing_ok=True)
-                probe.unlink(missing_ok=True)
+                self.reset()
                 process = self.box.start()
-                child = int(wait_for(pidfile))
-                process.send_signal(sig)
+                wait_for(self.box.out / "child.pid")
+                self.signal_and_release(process, sig)
                 code, stdout, stderr = self.finish(process)
                 self.assertEqual(code, -sig, stdout + stderr)
-                self.assertEqual(wait_for(probe), "present")
-                self.assertFalse(alive(child), "the binary outlived the launcher")
+                self.assertChildFinishedUnsignalled()
+                self.assertCleanedUp()
+
+    def test_a_burst_of_signals_still_waits_for_the_child(self) -> None:
+        # Sent back to back, bash may handle them in any order, so which one
+        # the launcher dies of is only known to be one of them. That the
+        # first recorded one wins is checked with sequenced signals below.
+        burst = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        self.box.script_asset(patient_child("exit 0\n"))
+        process = self.box.start()
+        wait_for(self.box.out / "child.pid")
+        self.signal_and_release(process, *burst)
+        code, stdout, stderr = self.finish(process)
+        self.assertIn(-code, [int(sig) for sig in burst], stdout + stderr)
+        self.assertChildFinishedUnsignalled()
+        self.assertCleanedUp()
+
+    def paused_launcher(self) -> Path:
+        text = LAUNCHER.read_text()
+        for anchor in (_RECORD_ANCHOR, _TRACE_ANCHOR, _PAUSE_ANCHOR):
+            self.assertEqual(text.count(anchor), 1, anchor)
+        text = text.replace(_RECORD_ANCHOR, _RECORD).replace(_TRACE_ANCHOR, _TRACE_ANCHOR + _TRACE)
+        path = self.box.root / "launch-paused.sh"
+        path.write_text(text.replace(_PAUSE_ANCHOR, _PAUSE))
+        return path
+
+    def send_in_sequence(self, process: subprocess.Popen, signals: tuple[signal.Signals, ...]) -> None:
+        """Each signal only after the launcher's trap recorded the one before,
+        so the order it handles them in is the order they were sent."""
+        recorded = self.box.out / "recorded"
+        for count, sig in enumerate(signals, 1):
+            process.send_signal(sig)
+            end = time.monotonic() + DEADLINE_S
+            while not (recorded.exists() and len(recorded.read_text().split()) >= count):
+                if time.monotonic() > end:
+                    self.fail(f"the launcher never recorded {sig.name}")
+                time.sleep(0.02)
+        self.assertEqual(recorded.read_text().split(), [sig.name[3:] for sig in signals])
+        (self.box.out / "signalled").write_text("yes\n")
+
+    def assertOnlySelfKills(self, process: subprocess.Popen) -> None:
+        """The launcher's only signal is the one it re-raises on itself."""
+        kills = (self.box.out / "kills").read_text().splitlines()
+        self.assertGreaterEqual(len(kills), 1, "the kill log recorded nothing, so it proves nothing")
+        self.assertEqual([line.split()[-1] for line in kills], [str(process.pid)] * len(kills), kills)
+
+    def test_a_signal_after_the_child_was_reaped_signals_no_child(self) -> None:
+        # Stage 1 pauses after gzip was reaped, stage 2 after the binary. The
+        # repeated cases also show that the first recorded signal wins.
+        self.box.script_asset(RECORDER)
+        launcher = self.paused_launcher()
+        cases = (
+            (1, (signal.SIGTERM,), False),
+            (1, (signal.SIGTERM, signal.SIGHUP, signal.SIGINT), False),
+            (2, (signal.SIGINT,), True),
+            (2, (signal.SIGHUP, signal.SIGTERM), True),
+        )
+        for stage, signals, binary_ran in cases:
+            with self.subTest(stage=stage, signals=[s.name for s in signals]):
+                self.reset()
+                process = self.box.start(launcher=launcher, AGX_TEST_PAUSE_AT=str(stage))
+                reaped = int(wait_for(self.box.out / "reaped.pid"))
+                self.assertFalse(alive(reaped), "the pause did not come after the reap")
+                self.send_in_sequence(process, signals)
+                code, stdout, stderr = self.finish(process)
+                self.assertEqual(code, -signals[0], stdout + stderr)
+                self.assertEqual(self.box.ran(), binary_ran)
+                self.assertOnlySelfKills(process)
                 self.assertCleanedUp()
 
 

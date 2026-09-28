@@ -59,12 +59,27 @@ exited 0: a stream with a bad CRC is never executed, although gzip already
 wrote all of it. It refuses a noexec `RUNNER_TEMP` before trying to run.
 
 It never `exec`s the binary, so its cleanup always runs and removes only the
-directory it created. The binary's exit status is the launcher's. On INT,
-TERM or HUP it sends TERM to the running child (a background child starts
-with INT ignored), waits for it, removes the directory, and dies of the
-caught signal. SIGKILL cannot be caught; after it the directory stays until
-the runner clears `RUNNER_TEMP`. A signal inside `mktemp` itself can leave
-that one empty directory.
+directory it created. The binary's exit status is the launcher's.
+
+Cancellation is deferred, not prompt. INT, TERM and HUP are recorded and
+never forwarded: the launcher signals no child, because a stored PID can
+outlive its process (bash reaps the child before `wait` returns), and a
+signal sent by number could then reach an unrelated process. The child that
+is running, gzip on a trusted asset or the drive on a bounded capture, ends
+by itself; the directory stays until it has. Then no further stage starts,
+the directory is removed, and the launcher dies of the first signal it
+recorded. A signal that arrives while a stage is being started lets that
+stage run to its end. A long-running child is bounded only by the job's
+timeout. Whether the runner also signals the child directly, as part of the
+step's process tree, is not verified. SIGKILL cannot be caught; after it
+the directory stays until the runner clears `RUNNER_TEMP`. A signal inside
+`mktemp` itself can leave that one empty directory. None of this is a
+cancellation contract for a production action that owns Git processes.
+
+The tests check this with children that record any signal they receive, and
+with a test-only copy of the launcher that pauses after a child was reaped
+and before its PID is forgotten, logging every `kill` it issues: a signal in
+that window must reach no child.
 
 The gzip member policy (one member, nothing appended) is enforced by CI on
 the committed bytes, not by the launcher: GNU gzip accepts concatenated
