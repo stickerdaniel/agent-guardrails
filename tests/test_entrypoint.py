@@ -28,7 +28,10 @@ class CleanPullRequestTests(RemoteTestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("checked 1 commit and the PR body: 0 errors", result.stdout)
+        self.assertIn(
+            "checked 1 commit, 1 changed file, and the PR title and body: 0 errors, 0 warnings",
+            result.stdout,
+        )
         self.assertNotIn("::error", result.stdout)
         self.assertEqual(os.listdir(self.remote.runner_temp), [])
 

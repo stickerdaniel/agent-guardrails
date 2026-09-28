@@ -52,6 +52,7 @@ class Settings:
     base_ref: str
     base_sha: str
     head_sha: str
+    title: str
     body: str | None
     login: str
 
@@ -126,6 +127,9 @@ def load(environ: Mapping[str, str]) -> Settings:
     # git check-ref-format --branch judges the rest before the fetch.
     if not isinstance(base_ref, str) or not base_ref:
         raise InvalidEvent("pull_request.base.ref is not a branch name")
+    title = pull.get("title")
+    if not isinstance(title, str):
+        raise InvalidEvent("pull_request.title is not a string")
     body = pull.get("body")
     if body is not None and not isinstance(body, str):
         raise InvalidEvent("pull_request.body must be a string or null")
@@ -146,6 +150,7 @@ def load(environ: Mapping[str, str]) -> Settings:
         base_ref=base_ref,
         base_sha=_sha(base.get("sha"), "pull_request.base.sha"),
         head_sha=_sha(head.get("sha"), "pull_request.head.sha"),
+        title=title,
         body=body,
         login=login,
     )

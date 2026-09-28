@@ -16,7 +16,8 @@ _HEAD = "c" * 40
 def _payload(**pull_request: object) -> dict:
     pull = {
         "number": 7,
-        "body": "Generated with GPT-5.6 for implementation in Claude Code.",
+        "title": "feat: Add x",
+        "body":"Generated with GPT-5.6 for implementation in Claude Code.",
         "user": {"login": "jane"},
         "base": {"ref": "main", "sha": _BASE},
         "head": {"sha": _HEAD},
@@ -54,6 +55,7 @@ class LoadTests(unittest.TestCase):
 
     def test_reads_body_from_event_file(self) -> None:
         settings = self._load()
+        self.assertEqual(settings.title, "feat: Add x")
         self.assertEqual(settings.body, "Generated with GPT-5.6 for implementation in Claude Code.")
         self.assertEqual(settings.number, 7)
         self.assertEqual((settings.base_ref, settings.base_sha, settings.head_sha), ("main", _BASE, _HEAD))
@@ -89,6 +91,7 @@ class LoadTests(unittest.TestCase):
             "pull_request.head.sha is not a 40-character hex commit SHA": (
                 _payload(head={"sha": _HEAD[:39]}), None),
             "pull_request.body must be a string or null": (_payload(body=["x"]), None),
+            "pull_request.title is not a string": (_payload(title=None), None),
             "pull_request.base.ref is not a branch name": (
                 _payload(base={"ref": "", "sha": _BASE}), None),
             "pull_request.user.login is not a string": (_payload(user={"login": None}), None),

@@ -1,13 +1,15 @@
-"""The checks themselves: bot trailers, bot identities, model attribution."""
+"""The checks themselves: bot trailers, bot identities, model attribution,
+hidden Unicode."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 
+from . import gitdata, hidden
 from .attribution import _ERROR as ATTRIBUTION_ERROR
 from .attribution import has_model_attribution
-from .gitdata import Commit
+from .gitdata import ChangedFile, Commit
 
 # Bare identities, matched against a trailer address and against the
 # author/committer fields. Each is a vendor-controlled address or a known
@@ -36,12 +38,31 @@ _TRAILER_RE = re.compile(
 # are exempt from nothing else.
 EXEMPT_FROM_ATTRIBUTION = frozenset({"renovate[bot]", "dependabot[bot]"})
 
+# The annotation title of each hidden Unicode rule.
+_UNICODE_TITLES = {
+    "invisible-char": "Invisible character",
+    "private-use": "Private-use character",
+    "unusual-space": "Unusual space",
+    "homoglyph": "Look-alike letter",
+}
+_NOUNS = {
+    "invisible-char": "invisible character",
+    "private-use": "private-use character",
+    "unusual-space": "unusual space",
+}
+# Unusual spaces are common in pasted prose, so they only warn. Every other
+# rule is an error unless the caller chose warn.
+_WARNING_RULES = frozenset({"unusual-space"})
+_UNSCANNABLE = "Cannot scan a changed file"
+
 
 @dataclass(frozen=True)
 class Finding:
     title: str
     message: str
     severity: str = "error"
+    file: str | None = None
+    line: int | None = None
 
 
 def bot_trailers(text: str) -> list[str]:
@@ -102,3 +123,94 @@ def check_attribution(body: str | None, login: str, required: bool) -> list[Find
     if has_model_attribution(body):
         return []
     return [Finding("PR model attribution required", ATTRIBUTION_ERROR)]
+
+
+def check_unicode(text: str | None, where: str, mode: str) -> list[Finding]:
+    """Behaviour 5 for the title, the raw body, or a commit message, line by
+    line. None of them is a file, so a BOM is never at a file's start there.
+    where names the text, such as "the PR body"."""
+    lines = (text or "").split("\n")
+    findings = []
+    for number, line in enumerate(lines, 1):
+        label = where if len(lines) == 1 else f"line {number} of {where}"
+        findings += _unicode_line(line.rstrip("\r"), label, mode)
+    return findings
+
+
+def check_changed_file(changed: ChangedFile, mode: str) -> list[Finding]:
+    """Behaviour 5 for the added lines of one file. A file that cannot be
+    read fails whatever the mode, because unread is not clean."""
+    if changed.kind == gitdata.REJECTED_BINARY:
+        formats = ", ".join(sorted(gitdata.BINARY_EXTENSIONS))
+        return [
+            Finding(
+                _UNSCANNABLE,
+                f"cannot scan {changed.path}: binary content. Git treats the file "
+                "as binary, so its lines cannot be checked. Only these formats "
+                f"may be binary: {formats}.",
+                file=changed.path,
+            )
+        ]
+    if changed.kind == gitdata.UNDECODABLE:
+        return [
+            Finding(
+                _UNSCANNABLE,
+                f"cannot decode {changed.path}: its name or its added lines are "
+                "not valid UTF-8.",
+                file=changed.path,
+            )
+        ]
+    findings = []
+    for number, line in changed.added:
+        findings += _unicode_line(
+            line,
+            f"line {number} of {changed.path}",
+            mode,
+            at_file_start=number == 1,
+            file=changed.path,
+            number=number,
+        )
+    return findings
+
+
+def _unicode_line(
+    line: str,
+    where: str,
+    mode: str,
+    *,
+    at_file_start: bool = False,
+    file: str | None = None,
+    number: int | None = None,
+) -> list[Finding]:
+    """One finding per rule that a line breaks, as upstream groups them."""
+
+    def finding(rule: str, message: str, column: int) -> Finding:
+        severity = "warning" if mode == "warn" or rule in _WARNING_RULES else "error"
+        text = (
+            f"{where[0].upper()}{where[1:]} {message}; the line reads: "
+            f"{hidden.snippet(line, column)}"
+        )
+        return Finding(_UNICODE_TITLES[rule], text, severity, file, number)
+
+    hits: dict[str, list[tuple[int, int]]] = {}
+    for rule, column, code_point in hidden.scan(line, at_file_start=at_file_start):
+        hits.setdefault(rule, []).append((column, code_point))
+    findings = []
+    for rule, found in hits.items():
+        names = list(dict.fromkeys(hidden.describe(code_point) for _, code_point in found))
+        count = len(found)
+        message = f"has {count} {_NOUNS[rule]}{'' if count == 1 else 's'}: {', '.join(names[:3])}"
+        if len(names) > 3:
+            message += ", ..."
+        if rule == "invisible-char":
+            # Text smuggled in tag characters, selectors, or zero-width bits.
+            payload = hidden.hidden_text([code_point for _, code_point in found])
+            if payload:
+                message += f" (hidden text: '{payload}')"
+        findings.append(finding(rule, message, found[0][0]))
+    for column, word, odd in hidden.mixed_script_words(line):
+        names = ", ".join(dict.fromkeys(hidden.describe(code_point) for code_point in odd))
+        findings.append(
+            finding("homoglyph", f"has the word '{word}', which mixes Latin with {names}", column)
+        )
+    return findings

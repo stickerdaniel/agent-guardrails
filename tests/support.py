@@ -109,9 +109,16 @@ class Remote:
             raise AssertionError(f"git {args[0]} failed: {proc.stderr.decode()}")
         return proc.stdout.decode().strip()
 
-    def commit(self, message: str, *, files: dict[str, str] | None = None, **env: str) -> str:
+    def commit(
+        self, message: str, *, files: dict[str, str | bytes] | None = None, **env: str
+    ) -> str:
         for name, content in (files or {}).items():
-            (self.work / name).write_text(content, encoding="utf-8")
+            path = self.work / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content, encoding="utf-8")
             self.git("add", name)
         self.git(
             "commit", "--quiet", "--allow-empty", "--no-verify", "--cleanup=verbatim",
@@ -130,6 +137,7 @@ class Remote:
         *,
         head: str,
         base: str | None = None,
+        title: str = "Add x",
         body: str | None = "",
         login: str = "jane",
         number: int = 1,
@@ -138,6 +146,7 @@ class Remote:
         payload = {
             "pull_request": {
                 "number": number,
+                "title": title,
                 "body": body,
                 "user": {"login": login},
                 "base": {"ref": base_ref, "sha": base or self.base},

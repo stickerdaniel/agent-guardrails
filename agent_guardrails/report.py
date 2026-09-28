@@ -74,7 +74,13 @@ class Reporter:
         self.log(f"{severity}: {title}: {message}")
 
     def finding(self, finding: Finding) -> None:
-        self.annotate(finding.severity, finding.title, finding.message)
+        self.annotate(
+            finding.severity,
+            finding.title,
+            finding.message,
+            file=finding.file,
+            line=finding.line,
+        )
 
     def failure(self, message: str) -> None:
         """The check could not run to the end, which fails it."""

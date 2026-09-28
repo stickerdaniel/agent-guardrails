@@ -10,8 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Composite action that fails a pull request when a commit message or the PR body carries a bot `Co-authored-by` trailer, or a commit names a coding agent as author or committer
 - Input `require-model-attribution` that requires a `Generated with <model>` line as the last non-empty line of the PR body, with `renovate[bot]` and `dependabot[bot]` exempt
-- Input `hidden-unicode`, validated as `error` or `warn`; no check reads it yet
+- Hidden Unicode check on the PR title and raw body, every commit message, and every line the pull request adds: invisible characters, private-use characters, and letters that pass for Latin fail, and unusual spaces warn. Text hidden in tag characters, variation selectors, or zero-width characters is decoded into the message
+- Input `hidden-unicode`: with `warn`, hidden Unicode findings are warnings; every other finding still fails
 - Fails closed: an invalid event or input, a head that moved since the event, a base commit missing from the fetched history, and an empty commit range all fail the run
+- A changed file that git treats as binary fails unless its extension is a listed binary format, and a text file that is not valid UTF-8 fails
 
 ### Provenance
 

@@ -27,10 +27,15 @@ def _check(environ: Mapping[str, str], out: Reporter) -> int:
         out.failure(str(error))
         return 1
 
+    mode = settings.hidden_unicode
     findings = rules.check_body(settings.body)
     findings += rules.check_attribution(
         settings.body, settings.login, settings.require_model_attribution
     )
+    findings += rules.check_unicode(settings.title, "the PR title", mode)
+    # The raw body, Macroscope block included: all of it can reach the squash
+    # commit message.
+    findings += rules.check_unicode(settings.body, "the PR body", mode)
 
     credential = gitdata.encode_credential(settings.token)
     out.mask(credential)
@@ -44,13 +49,26 @@ def _check(environ: Mapping[str, str], out: Reporter) -> int:
 
     for commit in pull_request.commits:
         findings += rules.check_commit(commit)
+        findings += rules.check_unicode(
+            commit.message, f"the message of commit {commit.sha}", mode
+        )
+    for changed in pull_request.files:
+        if changed.kind == gitdata.ALLOWED_BINARY:
+            out.log(f"not scanned (binary): {changed.path}")
+        elif changed.kind == gitdata.SUBMODULE:
+            out.log(f"not scanned (submodule): {changed.path}")
+        findings += rules.check_changed_file(changed, mode)
     for finding in findings:
         out.finding(finding)
 
     errors = sum(finding.severity == "error" for finding in findings)
+    warnings = len(findings) - errors
     commits = len(pull_request.commits)
+    files = len(pull_request.files)
     out.log(
-        f"checked {commits} commit{'' if commits == 1 else 's'} and the PR body: "
-        f"{errors} error{'' if errors == 1 else 's'}"
+        f"checked {commits} commit{'' if commits == 1 else 's'}, "
+        f"{files} changed file{'' if files == 1 else 's'}, and the PR title and body: "
+        f"{errors} error{'' if errors == 1 else 's'}, "
+        f"{warnings} warning{'' if warnings == 1 else 's'}"
     )
     return 1 if errors else 0

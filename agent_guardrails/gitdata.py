@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import base64
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from .event import Settings
@@ -26,6 +27,44 @@ _VERSION = re.compile(r"git version (\d+)\.(\d+)")
 _MINIMUM_VERSION = (2, 31)
 _NO_GIT = "git is not on PATH. This action needs git 2.31 or newer."
 _OLD_GIT = "This action needs git 2.31 or newer."
+
+# Both readings of the changed files share these options. No rename
+# detection, so moved content counts as added. T keeps a symlink or submodule
+# that became a regular file. No external diff driver and no textconv.
+_DIFF = (
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--diff-filter=ACMRT",
+)
+_UNPARSABLE = "cannot parse the diff"
+_DIFF_HEADER = b"diff --git "
+_HUNK = re.compile(rb"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_MODE = re.compile(r"[0-7]{6}")
+# Without rename detection git reports no R or C, which would carry two paths.
+_STATUSES = frozenset("AMT")
+_SUBMODULE_MODE = "160000"
+_C_ESCAPES = {
+    b"a": 0x07, b"b": 0x08, b"t": 0x09, b"n": 0x0A, b"v": 0x0B, b"f": 0x0C,
+    b"r": 0x0D, b'"': 0x22, b"\\": 0x5C,
+}
+
+# What a changed file turned out to be.
+TEXT = "text"
+ALLOWED_BINARY = "allowed binary"
+REJECTED_BINARY = "rejected binary"
+UNDECODABLE = "undecodable"
+SUBMODULE = "submodule"
+
+# Formats that are binary by nature. Git calls a file binary when it holds a
+# NUL byte, which any text file can be made to hold, so a binary file with any
+# other extension cannot be scanned and fails the check.
+BINARY_EXTENSIONS = frozenset({
+    "png", "jpg", "jpeg", "gif", "webp", "ico", "pdf", "zip", "gz",
+    "woff", "woff2", "ttf", "otf", "mp4", "mov", "mp3", "wav",
+})
 
 
 class GitError(Exception):
@@ -41,9 +80,36 @@ class Commit:
 
 
 @dataclass(frozen=True)
+class ChangedFile:
+    """A file the pull request adds or changes, compared with the merge base.
+
+    kind is one of TEXT, ALLOWED_BINARY, REJECTED_BINARY, UNDECODABLE and
+    SUBMODULE. Only a TEXT file has added lines: (line number in the new file,
+    text without its line ending)."""
+
+    path: str
+    status: str
+    old_mode: str
+    new_mode: str
+    kind: str
+    added: tuple[tuple[int, str], ...] = ()
+
+
+@dataclass(frozen=True)
 class PullRequest:
     commits: list[Commit]
     merge_base: str
+    files: list[ChangedFile]
+
+
+@dataclass
+class _Section:
+    """One "diff --git" section of a patch."""
+
+    header: bytes
+    binary: bool = False
+    in_hunks: bool = False
+    added: list[tuple[int, bytes]] = field(default_factory=list)
 
 
 def encode_credential(token: str) -> str:
@@ -184,7 +250,10 @@ def _read(repo: _Repository, settings: Settings) -> PullRequest:
     commits = _commits(repo, revision_range)
     if sorted(commit.sha for commit in commits) != sorted(shas):
         raise GitError("git log and git rev-list disagree about the commits to check")
-    return PullRequest(commits, merge_base.stdout.decode().strip())
+    diff_base = merge_base.stdout.decode().strip()
+    # The pull request is not blamed for what its base branch added.
+    files = _changed_files(repo, diff_base, settings.head_sha)
+    return PullRequest(commits, diff_base, files)
 
 
 def _commits(repo: _Repository, revision_range: str) -> list[Commit]:
@@ -212,3 +281,158 @@ def _commits(repo: _Repository, revision_range: str) -> list[Commit]:
             raise GitError("cannot parse the commit log")
         commits.append(Commit(sha, author, committer, message))
     return commits
+
+
+def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]:
+    """Every added or changed file with its added lines. The raw listing
+    names each file, its status and its modes exactly; the patch supplies the
+    lines. A type change prints as a deletion followed by a creation, so it
+    owns two sections of the patch."""
+    entries = _raw_entries(repo.git(*_DIFF, "--raw", "-z", "--no-abbrev", base, head, "--"))
+    sections = _sections(
+        repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--")
+    )
+    files = []
+    index = 0
+    for status, old_mode, new_mode, path in entries:
+        group = []
+        while index < len(sections) and _names_path(sections[index].header, path):
+            group.append(sections[index])
+            index += 1
+        if len(group) != (2 if status == "T" else 1):
+            raise GitError(_UNPARSABLE)
+        files.append(_classify(path, status, old_mode, new_mode, group[-1]))
+    if index != len(sections):
+        raise GitError(_UNPARSABLE)
+    return files
+
+
+def _raw_entries(raw: bytes) -> list[tuple[str, str, str, bytes]]:
+    """(status, old mode, new mode, path) from diff --raw -z."""
+    fields = raw.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 2:
+        raise GitError(_UNPARSABLE)
+    entries = []
+    for meta, path in zip(fields[::2], fields[1::2], strict=True):
+        parts = meta.decode("ascii", "replace").split(" ")
+        if (
+            len(parts) != 5
+            or not parts[0].startswith(":")
+            or not _MODE.fullmatch(parts[0][1:])
+            or not _MODE.fullmatch(parts[1])
+            or parts[4] not in _STATUSES
+            or not path
+        ):
+            raise GitError(_UNPARSABLE)
+        entries.append((parts[4], parts[0][1:], parts[1], path))
+    return entries
+
+
+def _sections(raw: bytes) -> list[_Section]:
+    """Split a -U0 patch into its sections and collect each one's added
+    lines. The hunk header says how many lines follow, so a content line that
+    starts with "+++ " or "diff --git " is still content."""
+    sections: list[_Section] = []
+    old = new = number = 0
+    rows = raw.split(b"\n")
+    if rows and rows[-1] == b"":
+        rows.pop()
+    for row in rows:
+        if old or new:
+            if row.startswith(b"+") and new:
+                sections[-1].added.append((number, row[1:]))
+                number += 1
+                new -= 1
+            elif row.startswith(b"-") and old:
+                old -= 1
+            elif not row.startswith(b"\\"):  # "\ No newline at end of file"
+                raise GitError(_UNPARSABLE)
+            continue
+        if row.startswith(_DIFF_HEADER):
+            sections.append(_Section(row[len(_DIFF_HEADER) :]))
+            continue
+        if not sections:
+            raise GitError(_UNPARSABLE)
+        section = sections[-1]
+        hunk = _HUNK.match(row)
+        if hunk:
+            old = 1 if hunk[1] is None else int(hunk[1])
+            number = int(hunk[2])
+            new = 1 if hunk[3] is None else int(hunk[3])
+            section.in_hunks = True
+        elif section.in_hunks:
+            if not row.startswith(b"\\"):
+                raise GitError(_UNPARSABLE)
+        elif row.startswith(b"Binary files ") and row.endswith(b" differ"):
+            section.binary = True
+        # Anything else before the first hunk is an extended header line.
+    return sections
+
+
+def _names_path(header: bytes, path: bytes) -> bool:
+    """Whether "diff --git <header>" is the section of this path. Without
+    renames both sides name the same path, C-quoted when it needs quoting."""
+    if header == b"a/" + path + b" b/" + path:
+        return True
+    if not header.startswith(b'"'):
+        return False
+    old, end = _unquote(header, 0)
+    if header[end : end + 2] != b' "':
+        return False
+    new, end = _unquote(header, end + 1)
+    return end == len(header) and old == b"a/" + path and new == b"b/" + path
+
+
+def _unquote(raw: bytes, start: int) -> tuple[bytes, int]:
+    """The C-quoted string that starts at raw[start], and the index after
+    its closing quote."""
+    value = bytearray()
+    index = start + 1
+    while index < len(raw):
+        char = raw[index : index + 1]
+        if char == b'"':
+            return bytes(value), index + 1
+        if char == b"\\":
+            octal = raw[index + 1 : index + 4]
+            if len(octal) == 3 and all(0x30 <= digit <= 0x37 for digit in octal):
+                value.append(int(octal, 8))
+                index += 4
+                continue
+            escape = _C_ESCAPES.get(raw[index + 1 : index + 2])
+            if escape is None:
+                raise GitError(_UNPARSABLE)
+            value.append(escape)
+            index += 2
+            continue
+        value += char
+        index += 1
+    raise GitError(_UNPARSABLE)
+
+
+def _classify(
+    raw_path: bytes, status: str, old_mode: str, new_mode: str, section: _Section
+) -> ChangedFile:
+    """What the new side of a file is. section shows that side: the only
+    section, or a type change's creation."""
+    try:
+        path = raw_path.decode("utf-8")
+    except UnicodeDecodeError:
+        path = raw_path.decode("utf-8", "replace")
+        return ChangedFile(path, status, old_mode, new_mode, UNDECODABLE)
+    if new_mode == _SUBMODULE_MODE:
+        # A commit of another repository. Its "Subproject commit" line is
+        # git's own text, not content.
+        return ChangedFile(path, status, old_mode, new_mode, SUBMODULE)
+    if section.binary:
+        extension = posixpath.splitext(path)[1][1:].lower()
+        kind = ALLOWED_BINARY if extension in BINARY_EXTENSIONS else REJECTED_BINARY
+        return ChangedFile(path, status, old_mode, new_mode, kind)
+    try:
+        added = tuple(
+            (number, text.decode("utf-8").rstrip("\r")) for number, text in section.added
+        )
+    except UnicodeDecodeError:
+        return ChangedFile(path, status, old_mode, new_mode, UNDECODABLE)
+    return ChangedFile(path, status, old_mode, new_mode, TEXT, added)
