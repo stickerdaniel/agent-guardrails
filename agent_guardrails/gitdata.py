@@ -131,7 +131,14 @@ class _Repository:
     def environment(self, *, authenticated: bool = False) -> dict[str, str]:
         """The whole environment of a git call. The credential travels as
         runtime config here, never on the command line, and only to fetch."""
-        config = [("core.hooksPath", self.hooks), ("core.quotepath", "off")]
+        # fetch otherwise starts a detached "git maintenance run --auto" in
+        # the temporary repository, which outlives the call, can still write
+        # while the repository is removed, and inherits this environment.
+        config = [
+            ("core.hooksPath", self.hooks),
+            ("core.quotepath", "off"),
+            ("maintenance.auto", "false"),
+        ]
         if authenticated:
             config.append((self._header_key, self._header))
         env = {

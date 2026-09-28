@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -161,6 +162,27 @@ class TemporaryRepositoryTests(RemoteTestCase):
         self.assertEqual(seen["heads"], [])
         self.assertEqual(seen["hooks"], [])
         self.assertEqual(os.listdir(self.remote.runner_temp), [])
+
+    def test_fetch_starts_no_background_maintenance(self) -> None:
+        trace = Path(self.remote.root) / "trace2.json"
+        real_environment = gitdata._Repository.environment
+
+        def traced(repo, *args, **kwargs):
+            env = real_environment(repo, *args, **kwargs)
+            env["GIT_TRACE2_EVENT"] = str(trace)
+            return env
+
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        self.remote.open_pull_request(head)
+        environ = self.remote.environment(self.remote.event(head=head))
+        with mock.patch.object(gitdata._Repository, "environment", traced):
+            code = main(environ, stdout=io.StringIO())
+
+        self.assertEqual(code, 0)
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertIn("fetch", [e["argv"][1] for e in events if e["event"] == "start"])
+        children = [e["argv"] for e in events if e["event"] == "child_start"]
+        self.assertEqual([argv for argv in children if "maintenance" in argv], [])
 
 
 if __name__ == "__main__":
