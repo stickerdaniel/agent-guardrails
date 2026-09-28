@@ -13,7 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Hidden Unicode check on the PR title and raw body, every commit message, and every line the pull request adds: invisible characters, private-use characters, and letters that pass for Latin fail, and unusual spaces warn. Text hidden in tag characters, variation selectors, or zero-width characters is decoded into the message
 - Input `hidden-unicode`: with `warn`, hidden Unicode findings are warnings; every other finding still fails
 - Fails closed: an invalid event or input, a head that moved since the event, a base commit missing from the fetched history, and an empty commit range all fail the run
-- A changed file that git treats as binary fails unless its extension is a listed binary format, and a text file that is not valid UTF-8 fails
+- A new-side binary file fails unless its extension is a listed binary format; invalid UTF-8 added lines and paths fail, as do undecodable mode-only destinations
+- Inspection limits: 64 MiB of Git standard output, 600 seconds for Git calls, 100 million scan-work units, and 1,000 findings; exceeding any limit fails even in `warn` mode
+
+### Fixed
+
+- Binary-to-text changes are scanned on the new side, and mode-only changes retain their true binary or text classification
+- Incomplete final diff hunks fail instead of accepting a partial added-line set
 
 ### Provenance
 

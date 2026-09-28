@@ -1,5 +1,5 @@
 name: Agent Guardrails
-description: Fail pull requests in which a coding agent claims authorship through a trailer or a commit identity.
+description: Check agent authorship, model attribution, and hidden Unicode in pull requests.
 author: stickerdaniel
 
 inputs:

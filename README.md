@@ -3,7 +3,7 @@
 [![CI](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A GitHub Action that fails a pull request when a coding agent signs it. It looks for a `Co-authored-by` trailer naming an agent in any commit message or in the PR body, and for an agent's address as a commit's author or committer. Squash merging can carry these trailers into the default branch. It also fails on hidden Unicode in the PR title and body, the commit messages, and every line the pull request adds: invisible characters such as zero-width spaces, bidi controls and tag characters, private-use characters, and letters from another script that pass for Latin. Unusual spaces only warn. Optionally, it also requires the PR body to end with a line such as `Generated with Claude Opus 5`.
+A GitHub Action that fails a pull request when a coding agent signs it. It looks for a `Co-authored-by` trailer naming an agent in any commit message or in the PR body, and for an agent's address as a commit's author or committer. Squash merging can carry these trailers into the default branch. It checks the PR title and body, commit messages, and added text lines for hidden Unicode: invisible characters such as zero-width spaces, bidi controls and tag characters, private-use characters, and letters from another script that pass for Latin. Unusual spaces only warn. Optionally, it also requires the PR body to end with a line such as `Generated with Claude Opus 5`.
 
 ## Usage
 
@@ -37,7 +37,9 @@ Any other value fails the run.
 
 ## Changed files
 
-Only added lines are checked, compared with the merge base, and a moved file counts as added. Git decides which files are binary by looking for a NUL byte, so a UTF-16 file counts as binary; a `.gitattributes` in the pull request changes nothing. A binary file fails the run unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`; those, and submodules, are listed in the log as not scanned. A text file that is not valid UTF-8 fails the run.
+Text is checked on added lines compared with the merge base; a moved file counts as added. Git judges binary content on the **new side**, independently of the old file, when the patch is binary or has no text hunk. A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`; those and submodules are logged as unscanned. Git's binary classification includes NUL-containing files and files above its big-file threshold. An invalid UTF-8 path or added line fails; a mode-only change also checks the full new file for binary content and valid UTF-8, without treating unchanged lines as additions. Otherwise, unchanged text is not validated. PR `.gitattributes` cannot suppress this check.
+
+A run stops with an error, even with `hidden-unicode: warn`, if Git produces more than 64 MiB of standard output or takes over 600 seconds, or scanning exceeds 100 million work units or 1,000 findings. GitHub displays at most ten error and ten warning annotations per step; findings beyond that display limit still affect the exit status and remain in the log.
 
 ## Trust model
 
