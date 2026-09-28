@@ -1,3 +1,3 @@
 # Unicode probe
 
-Visible text with a zero​width character.
+Visible text without an invisible character.
