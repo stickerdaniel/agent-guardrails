@@ -5,28 +5,25 @@
 # this file in a second commit, after the first is pushed:
 #   1. Replace __SOURCE_SHA__ with the full SHA of the pushed commit that
 #      added experiments/native-distribution.
-#   2. Save it as .github/workflows/native-distribution-transfer.yaml. The
-#      repository's pin test globs *.yml and requires a "# vX.Y.Z" comment,
-#      which a reference to an unreleased spike commit cannot truthfully
-#      carry; the .yaml name keeps that test's claim intact rather than
-#      inventing a version. Say so in the pull request.
+#   2. Save it as .github/workflows/native-distribution-transfer.yml. Extend
+#      the pin test explicitly for these two first-party, unreleased SHA
+#      references; keep full-SHA validation and never invent a version.
 #   3. It runs once, when the pull request is marked ready for review, not on
-#      every push: 28 fresh jobs per run.
+#      every push: 28 transfer jobs and two separate execution controls.
 #
 # Each round pairs two fresh jobs on the same runner label with identical
 # steps except the one remote action each names, which the runner downloads
 # during "Set up job":
-#   candidate: the native spike action at __SOURCE_SHA__, then run on the
-#              typical capture;
-#   control:   the Python action at the frozen baseline 40382e2, named by a
-#              step whose condition is never true, so that only its download
-#              happens. That a skipped step's action is still downloaded is
-#              expected runner behaviour, not yet observed here: check each
-#              control log for its "Download action repository" line.
-# The job log's per-line timestamps have sub-second resolution and are the
-# measurement; the steps API's whole-second times are not. Queue time is
-# outside both. The in-job markers bracket the remote action step and a
-# direct run of the same launcher from the checkout.
+#   candidate: the native spike action at __SOURCE_SHA__, downloaded only;
+#   control:   the Python action at the frozen baseline 40382e2, downloaded only.
+# Both remote steps are skipped, and both jobs run the identical local Rust
+# launcher afterwards. Whether skipped actions are downloaded must be verified
+# from every job's "Download action repository" log; absence is inconclusive,
+# not zero download cost. The separate smoke job proves real remote execution.
+# Sub-second download log timestamps measure preparation, not a complete
+# Python-versus-Rust job speedup. Queue time stays outside the comparison.
+# Do not add these component medians to unrelated checker medians to claim an
+# end-to-end saving. The final native stage still needs its full-action gate.
 name: Native distribution transfer
 
 on:
@@ -37,6 +34,30 @@ permissions:
   contents: read
 
 jobs:
+  remote-execution:
+    name: remote execution (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Generate the typical capture
+        run: python3 -I -B experiments/native-distribution/bench/gen_corpora.py --out "$RUNNER_TEMP/corpora" --case pr-typical
+      - name: Run the remotely delivered candidate
+        uses: stickerdaniel/agent-guardrails/experiments/native-distribution@__SOURCE_SHA__ # unmerged experiment
+        with:
+          capture: ${{ runner.temp }}/corpora/pr-typical.cap
+
   candidate:
     name: candidate (${{ matrix.arch }}, round ${{ matrix.round }})
     runs-on: ${{ matrix.runner }}
@@ -62,8 +83,9 @@ jobs:
         run: python3 -I -B experiments/native-distribution/bench/gen_corpora.py --out "$RUNNER_TEMP/corpora" --case pr-typical
       - name: Mark before the remote action
         run: echo "mark before-remote $(date +%s%N)"
-      - name: Native spike action, downloaded from GitHub
-        uses: stickerdaniel/agent-guardrails/experiments/native-distribution@__SOURCE_SHA__
+      - name: Native spike action, downloaded but never run
+        if: matrix.round == 0
+        uses: stickerdaniel/agent-guardrails/experiments/native-distribution@__SOURCE_SHA__ # unmerged experiment
         with:
           capture: ${{ runner.temp }}/corpora/pr-typical.cap
       - name: Mark after the remote action
@@ -103,7 +125,7 @@ jobs:
       - name: Python action at the frozen baseline, downloaded but never run
         # Rounds start at 1, so this never runs; the step exists to be downloaded.
         if: matrix.round == 0
-        uses: stickerdaniel/agent-guardrails@40382e2107a899e428cad2ab6b1d3132c90d3dcf
+        uses: stickerdaniel/agent-guardrails@40382e2107a899e428cad2ab6b1d3132c90d3dcf # unmerged experiment
       - name: Mark after the skipped remote action
         run: echo "mark after-remote $(date +%s%N)"
       - name: The same launcher, run from the checkout

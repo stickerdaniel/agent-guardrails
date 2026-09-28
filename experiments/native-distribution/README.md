@@ -1,7 +1,7 @@
 # Native distribution spike (Gate X)
 
-EXPERIMENTAL. This directory exists on one verification pull request that is
-closed unmerged. It is not the required check, it enforces no policy, and
+EXPERIMENTAL. This directory exists on one verification pull request that will
+be closed unmerged. It is not the required check, it enforces no policy, and
 nothing here is a release or a complete action. The required
 `check-bot-coauthors` job still runs the trusted Python action from `main`
 and must admit this tree like any other.

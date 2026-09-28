@@ -92,8 +92,31 @@ authorization of the copyright holder.
 
 ## Statically linked runtime
 
-The executables in `bin/` also contain, statically linked, the Rust 1.97.1
-standard library, the musl libc and crt objects that toolchain ships for
-`*-unknown-linux-musl`, and LLVM libunwind. Their license texts are not
-reproduced here yet. Collecting them is a precondition of any release built
-this way; it is not needed for this unmerged experiment.
+The executables in `bin/` contain statically linked runtime code. The
+following notices accompany these copies, including this experiment:
+
+| Component | Source | Notices |
+| --- | --- | --- |
+| Rust standard library and its dependencies | Rust `8bab26f4f68e0e26f0bb7960be334d5b520ea452`, compiler 1.97.1 | [MIT](licenses/rust-LICENSE-MIT.txt), [Apache-2.0](licenses/rust-LICENSE-APACHE.txt), [library copyright inventory](licenses/rust-COPYRIGHT-library.html) |
+| Compiler builtins | The same Rust source, `library/compiler-builtins` | [License and exceptions](licenses/compiler-builtins-LICENSE.txt) |
+| musl libc and startup objects | musl 1.2.5 with the patches in that Rust revision's `src/ci/docker/scripts/musl.sh` | [Copyright and component notices](licenses/musl-COPYRIGHT.txt) |
+| LLVM libunwind | Rust's LLVM source `dcc3606807c989700e0ac1cac18c31741bcd40d9` | [License and exceptions](licenses/libunwind-LICENSE.txt) |
+| LLVM compiler-rt startup objects | The same LLVM source, `compiler-rt` | [License and exceptions](licenses/compiler-rt-LICENSE.txt) |
+
+The library copyright inventory comes from the pinned compiler image, with
+indentation on otherwise blank lines removed; its license text is unchanged.
+The other license files are verbatim copies. The inventory covers
+standard-library dependencies across targets, not a claim
+that every listed component is linked into these two executables. The
+separate musl and LLVM notices cover their native runtime components.
+
+Link-map builds of both targets produced bytes identical to the committed
+assets. They include musl `libc.a`, LLVM `libunwind.a`, compiler builtins and
+the toolchain's self-contained startup objects. The linked musl architecture
+routines retain these additional MIT attributions:
+
+- `src/string/aarch64/memcpy.S` and `memset.S`: Copyright (c) 2012-2020, Arm Limited.
+- `src/thread/x86_64/__set_thread_area.s`: Copyright 2011-2012 Nicholas J. Kain.
+
+These notices accompany the binaries; they do not certify the build or
+replace the source-to-artifact comparisons.
