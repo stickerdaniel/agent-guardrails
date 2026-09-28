@@ -3,7 +3,7 @@
 [![CI](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A GitHub Action that fails a pull request when a coding agent signs it. It looks for a `Co-authored-by` trailer naming an agent in any commit message or in the PR body, and for an agent's address as a commit's author or committer. Squash merging copies every trailer into the merge commit, so one missed line stays on the default branch for good. Optionally, it also requires the PR body to end with a line such as `Generated with Claude Opus 5`.
+A GitHub Action that fails a pull request when a coding agent signs it. It looks for a `Co-authored-by` trailer naming an agent in any commit message or in the PR body, and for an agent's address as a commit's author or committer. Squash merging can carry these trailers into the default branch. Optionally, it also requires the PR body to end with a line such as `Generated with Claude Opus 5`.
 
 ## Usage
 

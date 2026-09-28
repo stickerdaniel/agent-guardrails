@@ -13,6 +13,8 @@ from typing import Any
 
 _KEY = re.compile(r"([A-Za-z0-9_.\-/]+):(?: +(.*))?")
 _INTEGER = re.compile(r"-?[0-9]+")
+# The YAML core schema's null spellings, read like an empty mapping value.
+_NULLS = ("null", "Null", "NULL", "~")
 
 
 def load(text: str) -> Any:
@@ -48,11 +50,18 @@ def _scalar(text: str) -> Any:
         if not text.endswith("]"):
             raise ValueError(f"unsupported flow sequence {text!r}")
         inner = text[1:-1].strip()
-        return [_scalar(part.strip()) for part in inner.split(",")] if inner else []
+        if not inner:
+            return []
+        parts = [part.strip() for part in inner.split(",")]
+        if not all(parts):
+            raise ValueError(f"unsupported empty entry in {text!r}")
+        return [_scalar(part) for part in parts]
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
         if "\\" in text or text[0] in text[1:-1]:
             raise ValueError(f"unsupported quoted scalar {text!r}")
         return text[1:-1]
+    if text in _NULLS:
+        return None
     if text in ("true", "false"):
         return text == "true"
     if _INTEGER.fullmatch(text):
