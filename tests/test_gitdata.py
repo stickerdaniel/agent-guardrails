@@ -184,6 +184,27 @@ class TemporaryRepositoryTests(RemoteTestCase):
         children = [e["argv"] for e in events if e["event"] == "child_start"]
         self.assertEqual([argv for argv in children if "maintenance" in argv], [])
 
+    def test_base_history_reached_through_a_merge_is_not_scanned(self) -> None:
+        # A PR that merged its base branch: a trailer already on the base is
+        # not part of the PR. A shallow fetch walks past the cut-off and
+        # blames the PR for it.
+        old = self.remote.commit("feat: Old change\n\nCo-authored-by: Cursor <cursoragent@cursor.com>\n")
+        self.remote.push(old, "refs/heads/main")
+        work = self.remote.commit("feat: PR change", files={"x.txt": "x\n"})
+        self.remote.git("checkout", "--quiet", old)
+        later = self.remote.commit("chore: Later change on main", files={"y.txt": "y\n"})
+        self.remote.push(later, "refs/heads/main")
+        self.remote.git("checkout", "--quiet", work)
+        self.remote.git("merge", "--quiet", "--no-ff", "-m", "Merge main", later)
+        head = self.remote.git("rev-parse", "HEAD")
+        self.remote.open_pull_request(head)
+        stdout = io.StringIO()
+
+        code = main(self.remote.environment(self.remote.event(head=head, base=later)), stdout=stdout)
+
+        self.assertEqual(code, 0, stdout.getvalue())
+        self.assertNotIn("cursoragent@cursor.com", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
