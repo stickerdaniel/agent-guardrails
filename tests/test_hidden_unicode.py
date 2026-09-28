@@ -4,6 +4,7 @@ upstream no-ai-marks tests/test_chars.py at 747c07a, without its helpers."""
 from __future__ import annotations
 
 import time
+import tracemalloc
 import unittest
 from unittest import mock
 
@@ -232,6 +233,82 @@ class LimitTests(unittest.TestCase):
             rules.check_changed_file(_changed("x.md", gitdata.UNDECODABLE), "warn", budget)
             with self.assertRaises(rules.LimitReached):
                 rules.check_commit(gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailer), budget)
+
+    def _peak(self, line: str, mode: str) -> tuple[rules.LimitReached, int]:
+        """The limit a line of a file stops at, and the most memory Python
+        took meanwhile beyond the line itself."""
+        tracemalloc.start()
+        try:
+            with self.assertRaises(rules.LimitReached) as caught:
+                _file_line(line, number=1, mode=mode)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        return caught.exception, peak
+
+    def test_line_longer_than_the_limit_is_not_scanned(self) -> None:
+        # Scanned, a million Cyrillic letters are a list of 36 MB and more.
+        line = "\u0430" * 1_000_000
+        for mode in ("error", "warn"):
+            with self.subTest(mode=mode), mock.patch.object(rules, "LINE_LENGTH_LIMIT", 1000):
+                error, peak = self._peak(line, mode)
+                self.assertEqual(
+                    str(error),
+                    "not fully checked: the hidden Unicode check stopped at line 1 of "
+                    "src/app.py, longer than the 1,000 characters this action scans in one line",
+                )
+                self.assertLess(peak, 2**20)
+
+    def test_dense_hits_stop_before_they_are_collected(self) -> None:
+        # One finding in the end, but a pair for each of half a million
+        # controls on the way: 45 MB.
+        line = "\x01" * 500_000
+        for mode in ("error", "warn"):
+            with self.subTest(mode=mode), mock.patch.object(rules, "HIT_LIMIT", 1000):
+                error, peak = self._peak(line, mode)
+                self.assertEqual(
+                    str(error),
+                    "not fully checked: the hidden Unicode check stopped at line 1 of "
+                    "src/app.py, which has more than the 1,000 suspicious characters this "
+                    "action collects in one line",
+                )
+                # The scanner's own list of code points is 4 MB of it.
+                self.assertLess(peak, 12 * 2**20)
+
+    def test_hits_up_to_the_limit_are_one_finding(self) -> None:
+        with mock.patch.object(rules, "HIT_LIMIT", 1000):
+            (finding,) = _file_line("\x01" * 1000, number=1)
+        self.assertIn("has 1000 invisible characters", finding.message)
+
+    def test_findings_within_one_line_survive_the_limit(self) -> None:
+        line = ("p\u0430 " * 4).rstrip()
+        checks = {
+            "file": lambda: _file_line(line, number=2, mode="warn"),
+            "text": lambda: _text(line, mode="warn"),
+        }
+        for name, check in checks.items():
+            with self.subTest(name), mock.patch.object(rules, "FINDINGS_LIMIT", 3):
+                with self.assertRaisesRegex(rules.LimitReached, "stopped after 3 findings") as caught:
+                    check()
+                self.assertEqual(
+                    [(f.title, f.severity) for f in caught.exception.findings],
+                    [(_LOOKALIKE, "warning")] * 3,
+                )
+
+    def test_findings_of_one_trailer_check_survive_the_limit(self) -> None:
+        trailers = "Co-authored-by: Claude <noreply@anthropic.com>\n" * 4
+        checks = {
+            "body": lambda: rules.check_body(trailers),
+            "commit": lambda: rules.check_commit(gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailers)),
+        }
+        for name, check in checks.items():
+            with self.subTest(name), mock.patch.object(rules, "FINDINGS_LIMIT", 3):
+                with self.assertRaises(rules.LimitReached) as caught:
+                    check()
+                self.assertEqual(len(caught.exception.findings), 3)
+                self.assertTrue(
+                    all("Co-Authored-By" in f.message for f in caught.exception.findings)
+                )
 
     def test_quotes_in_messages_are_bounded(self) -> None:
         (word,) = _text("pay " + "p" + "\u0430" * 100_000)

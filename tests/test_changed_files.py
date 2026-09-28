@@ -4,10 +4,13 @@ requests."""
 
 from __future__ import annotations
 
+import io
 import os
 import unittest
+from unittest import mock
 
-from agent_guardrails import event, gitdata
+from agent_guardrails import event, gitdata, rules
+from agent_guardrails.main import main
 
 from .support import TOKEN, RemoteTestCase, foreign_commands
 
@@ -387,6 +390,73 @@ class DriverTests(_ChangedFileTestCase):
         self.assertIn(
             "::error title=agent-guardrails::not fully checked: stopped after 1000 findings",
             result.stdout,
+        )
+
+    def test_findings_of_one_line_before_the_limit_are_reported(self) -> None:
+        # One line, 1,001 words that each mix a Cyrillic letter into Latin.
+        head = self.remote.commit("Add x", files={"x.md": ("p\u0430 " * 1001).rstrip() + "\n"})
+        result = self._run(head, mode="warn")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(
+            result.stdout.count("::warning file=x.md,line=1,title=Look-alike letter::"), 1000
+        )
+        self.assertEqual(result.stdout.count("agent-guardrails: warning: Look-alike letter: "), 1000)
+        self.assertTrue(
+            result.stdout.endswith(
+                "::error title=agent-guardrails::not fully checked: stopped after 1000 findings, "
+                "the most this action reports for one pull request\n"
+                "agent-guardrails: error: agent-guardrails: not fully checked: stopped after "
+                "1000 findings, the most this action reports for one pull request\n"
+            ),
+            result.stdout[-500:],
+        )
+
+    def test_findings_of_one_trailer_check_before_the_limit_are_reported(self) -> None:
+        trailers = "Co-authored-by: Claude <noreply@anthropic.com>\n" * 1001
+        cases = {
+            "Bot co-author trailer in the PR body": ("Add x", trailers),
+            "Bot co-author trailer in a commit": (f"Add x\n\n{trailers}", ""),
+        }
+        for title, (message, body) in cases.items():
+            with self.subTest(title):
+                head = self.remote.commit(message, files={"x.txt": message[-40:]})
+                result = self._run(head, body=body)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertEqual(result.stdout.count(f"::error title={title}::"), 1000)
+                self.assertIn("not fully checked: stopped after 1000 findings", result.stdout)
+
+
+class InspectionLimitTests(_ChangedFileTestCase):
+    """What a line may hold in memory while it is checked is bounded before
+    it is taken, and running out fails the run in warn mode too."""
+
+    def _main(self, head: str) -> str:
+        self.remote.open_pull_request(head)
+        stdout = io.StringIO()
+        environ = self.remote.environment(self.remote.event(head=head), CA_HIDDEN_UNICODE="warn")
+        self.assertEqual(main(environ, stdout=stdout), 1, stdout.getvalue())
+        self.assertEqual(foreign_commands(stdout.getvalue()), [])
+        return stdout.getvalue()
+
+    def test_line_of_dense_control_characters_stops_the_run(self) -> None:
+        head = self.remote.commit("Add x", files={"x.md": "ok\n" + "\x01" * 5000 + "\n"})
+        with mock.patch.object(rules, "HIT_LIMIT", 1000):
+            stdout = self._main(head)
+        self.assertIn(
+            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "stopped at line 2 of x.md, which has more than the 1,000 suspicious characters",
+            stdout,
+        )
+
+    def test_long_line_after_a_binary_file_stops_the_run(self) -> None:
+        self.new_base(**{"x.png": b"PNG\0"})
+        head = self.remote.commit("Replace", files={"x.png": "a" * 5000 + "\n"})
+        with mock.patch.object(rules, "LINE_LENGTH_LIMIT", 1000):
+            stdout = self._main(head)
+        self.assertIn(
+            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "stopped at line 1 of x.png, longer than the 1,000 characters",
+            stdout,
         )
 
 

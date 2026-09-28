@@ -12,7 +12,9 @@ import base64
 import os
 import posixpath
 import re
+import selectors
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -33,20 +35,34 @@ _OLD_GIT = "This action needs git 2.31 or newer."
 
 # What one run may spend on git. Running out fails the check in either mode:
 # a pull request read in part is not clean. The output limit counts stdout of
-# every git call together, while it is read, so the parsed copies held in
-# memory stay a small multiple of it. 64 MiB is far above the -U0 patch of a
-# regenerated lockfile, and the Unicode check scans that much text in about
-# half a minute at worst (see rules.WORK_LIMIT). The time limit covers the
-# fetch of the full history and every other git call; a stuck git would
-# otherwise hold the job until its own timeout, six hours by default. Of
-# stderr only the start is kept, since only an error message comes from it.
+# every git call together, while it is read. 64 MiB is far above the -U0 patch
+# of a regenerated lockfile, and the Unicode check scans that much text in
+# about half a minute at worst (see rules.WORK_LIMIT). Bytes alone do not
+# bound what parsing makes of them, since every line becomes objects of its
+# own: two million empty added lines, 4 MB of patch, took about 300 MB to
+# parse and decode, so 64 MiB of them would take gigabytes. The lines and
+# fields of every output are therefore counted, again for the whole run,
+# before anything splits it. Two million is several times the patch of a
+# regenerated lockfile. The time limit covers the fetch of the full history
+# and every other git call; a stuck git would otherwise hold the job until its
+# own timeout, six hours by default. Of stderr only the start is kept, since
+# only an error message comes from it.
 OUTPUT_LIMIT = 64 * 2**20
+RECORD_LIMIT = 2_000_000
 TIME_LIMIT = 600
 _ERROR_LIMIT = 4096
 _CHUNK = 65536
+# How often a reader looks up from an idle pipe to see whether it is stopped,
+# and how long it gets to see the end of a pipe once git's group is gone.
+_POLL = 0.1
+_GRACE = 2
 _TOO_MUCH = (
     "not fully checked: git printed more than {limit} MiB for this pull request, "
     "the most this action reads"
+)
+_TOO_MANY = (
+    "not fully checked: git printed more than {limit:,} lines for this pull request, "
+    "the most this action parses"
 )
 _TOO_SLOW = (
     "not fully checked: reading this pull request with git took longer than "
@@ -138,6 +154,7 @@ class _Section:
     binary: bool = False
     in_hunks: bool = False
     added: list[tuple[int, bytes]] = field(default_factory=list)
+    removed: int = 0
 
 
 def encode_credential(token: str) -> str:
@@ -148,13 +165,17 @@ def encode_credential(token: str) -> str:
 class _Reader(threading.Thread):
     """Drains one pipe of a git process and keeps at most limit bytes of it.
     With overflow set, more than limit is an error and stops git at once;
-    without, the rest is read and dropped so git never blocks on a full pipe."""
+    without, the rest is read and dropped so git never blocks on a full pipe.
+    It reads the descriptor itself, never through the pipe's buffer, and
+    only once the descriptor is readable, so it can always be stopped and the
+    pipe closed after it."""
 
     def __init__(self, pipe: IO[bytes], limit: int, overflow: Callable[[], None] | None = None):
         super().__init__(daemon=True)
-        self._pipe = pipe
+        self._fd = pipe.fileno()
         self._limit = limit
         self._overflow = overflow
+        self._stopping = threading.Event()
         self._chunks: list[bytes] = []
         self._size = 0
         self.cut = False
@@ -165,23 +186,48 @@ class _Reader(threading.Thread):
 
     def run(self) -> None:
         try:
-            while chunk := self._pipe.read1(_CHUNK):
-                room = self._limit - self._size
-                if room > 0:
-                    self._chunks.append(chunk[:room])
-                    self._size += min(room, len(chunk))
-                if len(chunk) > room:
-                    self.cut = True
-                if self.cut and self._overflow is not None and not self.exceeded:
-                    self.exceeded = True
-                    self._overflow()
+            with selectors.DefaultSelector() as selector:
+                selector.register(self._fd, selectors.EVENT_READ)
+                while not self._stopping.is_set():
+                    if not selector.select(_POLL):
+                        continue
+                    chunk = os.read(self._fd, _CHUNK)
+                    if not chunk:
+                        self.complete = True
+                        return
+                    room = self._limit - self._size
+                    if room > 0:
+                        self._chunks.append(chunk[:room])
+                        self._size += min(room, len(chunk))
+                    if len(chunk) > room:
+                        self.cut = True
+                    if self.cut and self._overflow is not None and not self.exceeded:
+                        self.exceeded = True
+                        self._overflow()
         except (OSError, ValueError):
             return
-        self.complete = True
+
+    def finish(self) -> None:
+        """Give the reader a moment to see the end of a pipe that nobody
+        writes to any more, then stop it."""
+        self.join(_GRACE)
+        self._stopping.set()
+        self.join()
 
     @property
     def data(self) -> bytes:
         return b"".join(self._chunks)
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """Kill git and every process it started, which share its group. git is
+    reaped only after this, so until then its number names no other group."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Nothing is left running. macOS answers EPERM for a group whose
+        # only member is git's unreaped exit.
+        pass
 
 
 class _Repository:
@@ -195,6 +241,7 @@ class _Repository:
         self._header = f"AUTHORIZATION: basic {credential}"
         self._secrets = (settings.token, credential)
         self._output_left = OUTPUT_LIMIT
+        self._records_left = RECORD_LIMIT
         self._deadline = time.monotonic() + TIME_LIMIT
 
     def environment(self, *, authenticated: bool = False) -> dict[str, str]:
@@ -238,12 +285,15 @@ class _Repository:
         if time.monotonic() >= self._deadline:
             raise GitError(too_slow)
         try:
+            # A group of its own, so that what git starts, such as the remote
+            # helper that carries the credential, can be stopped with it.
             proc = subprocess.Popen(
                 ["git", *args],
                 env=self.environment(authenticated=authenticated),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise GitError(_NO_GIT) from None
@@ -251,24 +301,28 @@ class _Repository:
             raise GitError(
                 f"git {args[0]} could not start: {type(error).__name__}"
             ) from None
-        stdout = _Reader(proc.stdout, self._output_left, overflow=proc.kill)
-        stderr = _Reader(proc.stderr, _ERROR_LIMIT)
-        timed_out = False
+        readers: list[_Reader] = []
         try:
-            proc.wait(timeout=max(0, self._deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            proc.kill()
+            readers.append(
+                _Reader(proc.stdout, self._output_left, overflow=partial(_kill_group, proc))
+            )
+            readers.append(_Reader(proc.stderr, _ERROR_LIMIT))
+            # Both pipes end only when git and every process that holds them
+            # have ended, so the end of the pipes is what is waited for.
+            for reader in readers:
+                reader.join(max(0, self._deadline - time.monotonic()))
+            timed_out = any(reader.is_alive() for reader in readers)
+        finally:
+            # On every way out, in this order: nothing git started is left
+            # running, git is reaped, the readers have stopped, and only then
+            # are the pipes closed. The caller removes the repository after.
+            _kill_group(proc)
             proc.wait()
-        # A process git started can hold the pipes open after git is gone, so
-        # the readers get what is left of the time, and a second to see the
-        # end of a git that was stopped.
-        for reader in (stdout, stderr):
-            reader.join(max(1, self._deadline - time.monotonic()))
-        if stdout.is_alive() or stderr.is_alive():
-            raise GitError(too_slow)
-        proc.stdout.close()
-        proc.stderr.close()
+            for reader in readers:
+                reader.finish()
+            proc.stdout.close()
+            proc.stderr.close()
+        stdout, stderr = readers
         if timed_out:
             raise GitError(too_slow)
         if stdout.exceeded:
@@ -282,6 +336,14 @@ class _Repository:
             # A secret cut off at the end could not be redacted whole.
             errors = errors[: max(0, len(errors) - max(len(secret) for secret in self._secrets))]
         return subprocess.CompletedProcess(proc.args, proc.returncode, output, errors)
+
+    def charge(self, output: bytes) -> bytes:
+        """Count the lines and fields of output against what is left of the
+        run's record limit, before anything splits it, and return it."""
+        self._records_left -= output.count(b"\n") + output.count(b"\0") + 1
+        if self._records_left < 0:
+            raise GitError(_TOO_MANY.format(limit=RECORD_LIMIT))
+        return output
 
     def git(self, *args: str, authenticated: bool = False) -> bytes:
         """Run git and return its output. On failure only git's own stderr,
@@ -352,7 +414,7 @@ def _read(repo: _Repository, settings: Settings) -> PullRequest:
         raise GitError("base and head have no common history")
 
     revision_range = f"{settings.base_sha}..{settings.head_sha}"
-    shas = repo.git("rev-list", revision_range, "--").decode().split()
+    shas = repo.charge(repo.git("rev-list", revision_range, "--")).decode().split()
     # Head equal to base, or head already contained in base. Nothing to read
     # is not proof of a clean pull request, so it fails.
     if not shas:
@@ -368,15 +430,18 @@ def _read(repo: _Repository, settings: Settings) -> PullRequest:
 
 
 def _commits(repo: _Repository, revision_range: str) -> list[Commit]:
-    raw = repo.git(
-        "log",
-        "-z",
-        "--no-show-signature",
-        "--no-color",
-        "--encoding=UTF-8",
-        f"--format={_LOG_FORMAT}",
-        revision_range,
-        "--",
+    # The lines of each message count too: the checks split it into them.
+    raw = repo.charge(
+        repo.git(
+            "log",
+            "-z",
+            "--no-show-signature",
+            "--no-color",
+            "--encoding=UTF-8",
+            f"--format={_LOG_FORMAT}",
+            revision_range,
+            "--",
+        )
     )
     fields = raw.split(b"\0")
     if fields and fields[-1] == b"":
@@ -399,17 +464,24 @@ def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]
     names each file, its status, its modes and its new blob exactly; the patch
     supplies the lines. A type change prints as a deletion followed by a
     creation, so it owns two sections of the patch."""
-    entries = _raw_entries(repo.git(*_DIFF, "--raw", "-z", "--no-abbrev", base, head, "--"))
+    entries = _raw_entries(
+        repo.charge(repo.git(*_DIFF, "--raw", "-z", "--no-abbrev", base, head, "--"))
+    )
     sections = _sections(
-        repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--")
+        repo.charge(
+            repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--")
+        )
     )
     empty_blob = None
 
-    def new_side(blob: str) -> _Section:
+    def empty() -> str:
         nonlocal empty_blob
         if empty_blob is None:
             empty_blob = _write_empty_blob(repo)
-        return _new_side(repo, empty_blob, blob)
+        return empty_blob
+
+    def new_side(blob: str) -> _Section:
+        return _new_side(repo, empty(), blob)
 
     files = []
     index = 0
@@ -419,6 +491,17 @@ def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]
             group.append(sections[index])
             index += 1
         if len(group) != (2 if status == "T" else 1):
+            raise GitError(_UNPARSABLE)
+        # A new file, or a type change's creation, is compared with nothing
+        # already. Without a hunk it has to be the empty blob. A submodule's
+        # commit is no blob.
+        creation = group[-1]
+        if (
+            status != "M"
+            and new_mode != _SUBMODULE_MODE
+            and not _whole(creation)
+            and (creation.in_hunks or blob != empty())
+        ):
             raise GitError(_UNPARSABLE)
         files.append(
             _classify(path, status, old_mode, new_mode, group[-1], partial(new_side, blob))
@@ -466,12 +549,27 @@ def _new_side(repo: _Repository, empty_blob: str, blob: str) -> _Section:
     Binary if git calls it binary, otherwise every line of it as added. The
     blob comes from the raw listing, so it is part of the fetched head."""
     patch = repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", empty_blob, blob)
-    sections = _sections(patch)
+    sections = _sections(repo.charge(patch))
     if not sections and blob == empty_blob:
         return _Section(b"")
     if len(sections) != 1 or sections[0].header != f"a/{empty_blob} b/{blob}".encode():
         raise GitError(_UNPARSABLE)
-    return sections[0]
+    section = sections[0]
+    if blob != empty_blob and not _whole(section):
+        raise GitError(_UNPARSABLE)
+    return section
+
+
+def _whole(section: _Section) -> bool:
+    """Whether a section that compares nothing with a file says what the
+    file is. A file that is not empty differs from nothing, so git has to
+    call it binary or add every line of it from the first. A header alone
+    says neither."""
+    return section.binary or (
+        bool(section.added)
+        and not section.removed
+        and all(number == index for index, (number, _) in enumerate(section.added, 1))
+    )
 
 
 def _sections(raw: bytes) -> list[_Section]:
@@ -490,6 +588,7 @@ def _sections(raw: bytes) -> list[_Section]:
                 number += 1
                 new -= 1
             elif row.startswith(b"-") and old:
+                sections[-1].removed += 1
                 old -= 1
             elif not row.startswith(b"\\"):  # "\ No newline at end of file"
                 raise GitError(_UNPARSABLE)

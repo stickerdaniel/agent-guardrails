@@ -71,6 +71,16 @@ _UNSCANNABLE = "Cannot scan a changed file"
 # annotations of each severity per step anyway.
 WORK_LIMIT = 100_000_000
 FINDINGS_LIMIT = 1000
+# What one line may hold in memory while it is checked, both enforced before
+# the memory is taken. The scanner copies a line into a list of code points
+# and the look-alike check copies its words again, up to about 80 bytes a
+# code point together, so a longer line is not scanned. Each suspicious
+# character is kept as a (column, code point) pair of about 100 bytes until
+# the line's findings are built, so a line with more of them stops the
+# collection. A line of 60 MiB of control characters would otherwise have
+# held more than 5 GiB of pairs for its one finding.
+LINE_LENGTH_LIMIT = 4_000_000
+HIT_LIMIT = 100_000
 # How much of a trailer line, a word, or a decoded payload a message quotes,
 # so that the findings limit also bounds the log.
 _QUOTE_LIMIT = 200
@@ -82,7 +92,8 @@ class LimitReached(Exception):
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
-        # What the check that stopped had found in the lines before.
+        # What the check that stopped had found before it stopped. Each
+        # level it passes through puts its own earlier findings in front.
         self.findings: list[Finding] = []
 
 
@@ -96,6 +107,11 @@ class Budget:
 
     def spend(self, line: str, where: str) -> None:
         """Charge one line before the scanner sees it."""
+        if len(line) > LINE_LENGTH_LIMIT:
+            raise LimitReached(
+                f"not fully checked: the hidden Unicode check stopped at {where}, "
+                f"longer than the {LINE_LENGTH_LIMIT:,} characters this action scans in one line"
+            )
         searches = sum(line.count(char) for char in _REPEATED_SEARCHES)
         self._work += len(line) * (1 + searches)
         if self._work > WORK_LIMIT:
@@ -135,31 +151,35 @@ def check_commit(commit: Commit, budget: Budget | None = None) -> list[Finding]:
     """Behaviours 1 and 2: a trailer in the message, an agent as author or
     committer. Squash merging can carry these trailers into the merge commit."""
     budget = Budget() if budget is None else budget
-    findings = []
-    for line in bot_trailers(commit.message):
-        budget.found()
-        findings.append(
-            Finding(
-                "Bot co-author trailer in a commit",
-                f"Commit {commit.sha} contains a bot Co-Authored-By line: "
-                f"{_quote(line.strip())}. Reword the commit with git rebase -i and "
-                "remove the line.",
-            )
-        )
-    for role, address in (
-        ("authored", commit.author_email),
-        ("committed", commit.committer_email),
-    ):
-        if is_bot_identity(address):
+    findings: list[Finding] = []
+    try:
+        for line in bot_trailers(commit.message):
             budget.found()
             findings.append(
                 Finding(
-                    "Bot commit author",
-                    f"Commit {commit.sha} is {role} by a coding agent: {address}. "
-                    "Rewrite it with git commit --amend --reset-author --no-edit, "
-                    "which makes you its author and committer.",
+                    "Bot co-author trailer in a commit",
+                    f"Commit {commit.sha} contains a bot Co-Authored-By line: "
+                    f"{_quote(line.strip())}. Reword the commit with git rebase -i and "
+                    "remove the line.",
                 )
             )
+        for role, address in (
+            ("authored", commit.author_email),
+            ("committed", commit.committer_email),
+        ):
+            if is_bot_identity(address):
+                budget.found()
+                findings.append(
+                    Finding(
+                        "Bot commit author",
+                        f"Commit {commit.sha} is {role} by a coding agent: {address}. "
+                        "Rewrite it with git commit --amend --reset-author --no-edit, "
+                        "which makes you its author and committer.",
+                    )
+                )
+    except LimitReached as error:
+        error.findings = findings + error.findings
+        raise
     return findings
 
 
@@ -168,16 +188,20 @@ def check_body(body: str | None, budget: Budget | None = None) -> list[Finding]:
     trailer there reaches the default branch like one in a commit. Reads the
     raw body: a Macroscope block lands in that commit message too."""
     budget = Budget() if budget is None else budget
-    findings = []
-    for line in bot_trailers(body or ""):
-        budget.found()
-        findings.append(
-            Finding(
-                "Bot co-author trailer in the PR body",
-                f"The PR body contains a bot Co-Authored-By line: {_quote(line.strip())}. "
-                "Edit the PR description and remove it.",
+    findings: list[Finding] = []
+    try:
+        for line in bot_trailers(body or ""):
+            budget.found()
+            findings.append(
+                Finding(
+                    "Bot co-author trailer in the PR body",
+                    f"The PR body contains a bot Co-Authored-By line: {_quote(line.strip())}. "
+                    "Edit the PR description and remove it.",
+                )
             )
-        )
+    except LimitReached as error:
+        error.findings = findings + error.findings
+        raise
     return findings
 
 
@@ -204,7 +228,7 @@ def check_unicode(
             label = where if len(lines) == 1 else f"line {number} of {where}"
             findings += _unicode_line(line.rstrip("\r"), label, mode, budget)
     except LimitReached as error:
-        error.findings = findings
+        error.findings = findings + error.findings
         raise
     return findings
 
@@ -250,7 +274,7 @@ def check_changed_file(
                 number=number,
             )
     except LimitReached as error:
-        error.findings = findings
+        error.findings = findings + error.findings
         raise
     return findings
 
@@ -289,27 +313,38 @@ def _unicode_line(
         return Finding(_UNICODE_TITLES[rule], text, severity, file, number)
 
     hits: dict[str, list[tuple[int, int]]] = {}
-    for rule, column, code_point in hidden.scan(line, at_file_start=at_file_start):
-        hits.setdefault(rule, []).append((column, code_point))
-    findings = []
-    for rule, found in hits.items():
-        count = len(found)
-        message = (
-            f"has {count} {_NOUNS[rule]}{'' if count == 1 else 's'}: "
-            f"{_names(code_point for _, code_point in found)}"
-        )
-        if rule == "invisible-char":
-            # Text smuggled in tag characters, selectors, or zero-width bits.
-            payload = hidden.hidden_text([code_point for _, code_point in found])
-            if payload:
-                message += f" (hidden text: '{_quote(payload)}')"
-        findings.append(finding(rule, message, found[0][0]))
-    for column, word, odd in hidden.mixed_script_words(line):
-        findings.append(
-            finding(
-                "homoglyph",
-                f"has the word '{_quote(word)}', which mixes Latin with {_names(odd)}",
-                column,
+    scanned = hidden.scan(line, at_file_start=at_file_start)
+    for seen, (rule, column, code_point) in enumerate(scanned, 1):
+        if seen > HIT_LIMIT:
+            raise LimitReached(
+                f"not fully checked: the hidden Unicode check stopped at {where}, which has "
+                f"more than the {HIT_LIMIT:,} suspicious characters this action collects "
+                "in one line"
             )
-        )
+        hits.setdefault(rule, []).append((column, code_point))
+    findings: list[Finding] = []
+    try:
+        for rule, found in hits.items():
+            count = len(found)
+            message = (
+                f"has {count} {_NOUNS[rule]}{'' if count == 1 else 's'}: "
+                f"{_names(code_point for _, code_point in found)}"
+            )
+            if rule == "invisible-char":
+                # Text smuggled in tag characters, selectors, or zero-width bits.
+                payload = hidden.hidden_text([code_point for _, code_point in found])
+                if payload:
+                    message += f" (hidden text: '{_quote(payload)}')"
+            findings.append(finding(rule, message, found[0][0]))
+        for column, word, odd in hidden.mixed_script_words(line):
+            findings.append(
+                finding(
+                    "homoglyph",
+                    f"has the word '{_quote(word)}', which mixes Latin with {_names(odd)}",
+                    column,
+                )
+            )
+    except LimitReached as error:
+        error.findings = findings + error.findings
+        raise
     return findings
