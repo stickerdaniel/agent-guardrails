@@ -1,0 +1,56 @@
+{
+  "status": "EXPERIMENTAL Gate X build recipe. Not a release recipe and not an approval of these inputs.",
+  "source": [
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/src/main.rs",
+    "rust/src/tables.rs"
+  ],
+  "toolchain": {
+    "rustc_release": "1.97.1",
+    "rustc_commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+    "llvm": "22.1.6",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "c_driver": "gcc (Alpine 15.2.0) 15.2.0, invoked as cc",
+    "linker": "GNU ld (GNU Binutils) 2.45.1",
+    "libc": "the toolchain's self-contained musl crt objects and libc.a (link-self-contained=yes), not the image's musl-dev",
+    "compressor": "BusyBox v1.37.0 gzip applet of the same image, not GNU gzip"
+  },
+  "targets": {
+    "x64": {
+      "platform": "linux/amd64",
+      "image": "docker.io/library/rust@sha256:83b16fd204613a557527e81ef4f87fd513229187c49635e3c7f96b08dfa43c33",
+      "image_tag_at_selection": "rust:1.97.1-alpine3.23",
+      "triple": "x86_64-unknown-linux-musl",
+      "toolchain_dir": "/usr/local/rustup/toolchains/1.97.1-x86_64-unknown-linux-musl",
+      "elf_machine": 62,
+      "asset": "bin/linux-x64/agent-guardrails.gz"
+    },
+    "arm64": {
+      "platform": "linux/arm64",
+      "image": "docker.io/library/rust@sha256:ec97f172f73f5ec381a238dad6ddd99e0e9c14fd3709a05beb41ccdf50eb666a",
+      "image_tag_at_selection": "rust:1.97.1-alpine3.23",
+      "triple": "aarch64-unknown-linux-musl",
+      "toolchain_dir": "/usr/local/rustup/toolchains/1.97.1-aarch64-unknown-linux-musl",
+      "elf_machine": 183,
+      "asset": "bin/linux-arm64/agent-guardrails.gz"
+    }
+  },
+  "build": {
+    "command": "cargo build --frozen --offline --release --target <triple>",
+    "network": "none (docker run --network none); the crate has no dependencies, so nothing is fetched",
+    "environment": "env -i, then only PATH, RUSTC, HOME, CARGO_HOME, CARGO_TARGET_DIR, CARGO_INCREMENTAL=0, TZ=UTC, LC_ALL=C, LANG=C, SOURCE_DATE_EPOCH, RUSTFLAGS",
+    "rustflags": "--remap-path-prefix=<fresh work>/src=/agent-guardrails-spike --remap-path-prefix=<fresh work>/cargo-home=/cargo-home -C target-feature=+crt-static -C linker=cc -C link-self-contained=yes",
+    "profile": "release: opt-level 3, lto fat, codegen-units 1, panic unwind, strip symbols, no debug info",
+    "source_date_epoch": "1767225600",
+    "source_date_epoch_meaning": "2026-01-01T00:00:00Z, a fixed constant. It is not derived from any commit, so adding the assets cannot change it; rustc embeds no timestamp either way.",
+    "source_root": "/agent-guardrails-spike",
+    "link_self_contained": "yes",
+    "no_build_stamp": "No git SHA, date, host name or path is embedded; the work directory name differs on every build."
+  },
+  "compression": {
+    "command": "gzip -9 -c < agent-guardrails > agent-guardrails.gz",
+    "envelope": "one member; header 1f8b 08 00 00000000 02 03 (deflate, no flags, mtime 0, xfl 2, os 3); deflate data; CRC32 and ISIZE of the ELF; nothing after the trailer",
+    "equality": "the committed .gz must equal a fresh compression of a fresh build byte for byte, and must decompress to that build byte for byte"
+  }
+}

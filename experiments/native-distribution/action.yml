@@ -1,0 +1,19 @@
+name: Agent Guardrails native distribution spike
+description: EXPERIMENTAL Gate X measurement action. Runs the packaged native hidden-Unicode drive on one capture. It is not the required check and enforces no policy.
+author: stickerdaniel
+
+inputs:
+  capture:
+    description: Path of one AGCAP1 capture file of at most 64 MiB. Experiment input only; nothing else is read.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run the packaged native drive (experimental)
+      shell: bash
+      # No token and no CA_* setting reach this step: the experiment reads
+      # only the capture. launch.sh never execs, so its cleanup always runs.
+      env:
+        AGX_CAPTURE: ${{ inputs.capture }}
+      run: bash --noprofile --norc -- "$GITHUB_ACTION_PATH/launch.sh"

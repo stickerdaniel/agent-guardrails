@@ -1,0 +1,167 @@
+name: Native distribution spike
+
+# EXPERIMENTAL Gate X verification of experiments/native-distribution, for an
+# unmerged pull request. Not a required check. It runs with a read-only token
+# and no secrets, never touches the trusted pull_request_target workflow, and
+# publishes nothing: the reproduce jobs rebuild both assets from source and
+# compare them with the committed ones, and only after that do the measure
+# jobs time those committed, verified assets. Every job checks out the exact
+# pull request head, not a merge commit.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-distribution-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tables:
+    name: tables (CPython 3.14 regeneration)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Check out the frozen Python baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 40382e2107a899e428cad2ab6b1d3132c90d3dcf
+          path: baseline-40382e2
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Regenerate the Unicode tables and compare with the committed source
+        run: python -I -B experiments/native-distribution/tools/gen_tables.py --baseline baseline-40382e2 --check
+
+  reproduce:
+    name: reproduce (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Record the runner
+        run: |
+          uname -a
+          nproc
+          docker version --format 'docker {{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}'
+      - name: Build twice from source and compare with the committed asset
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          work=$(mktemp -d "$RUNNER_TEMP/reproduce.XXXXXXXX")
+          python3 -I -B experiments/native-distribution/build/reproduce.py \
+            --arch "$ARCH" --work "$work" --record "$RUNNER_TEMP/reproduce-$ARCH.json"
+      - name: Inspect the committed ELF and run it on this runner
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          dir=$(mktemp -d "$RUNNER_TEMP/inspect.XXXXXXXX")
+          gzip -d -c "experiments/native-distribution/bin/linux-$ARCH/agent-guardrails.gz" > "$dir/agent-guardrails"
+          chmod 0700 "$dir/agent-guardrails"
+          file "$dir/agent-guardrails"
+          "$dir/agent-guardrails" --unidata
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: reproduce-${{ matrix.arch }}
+          path: ${{ runner.temp }}/reproduce-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  tests:
+    name: launcher and artifact tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Mount a noexec directory for the noexec case
+        run: |
+          sudo mkdir -p /mnt/agx-noexec
+          sudo mount -t tmpfs -o rw,noexec,nosuid,nodev,size=16m,mode=1777 tmpfs /mnt/agx-noexec
+          findmnt /mnt/agx-noexec
+      - name: Run every experiment test, failing on any skip
+        env:
+          AGX_REQUIRE_LINUX: "1"
+          AGX_REQUIRE_NOEXEC: "1"
+          AGX_NOEXEC_DIR: /mnt/agx-noexec
+        run: python3 -I -B experiments/native-distribution/tests/run_all.py
+
+  measure:
+    name: measure (${{ matrix.arch }})
+    needs: [tables, reproduce, tests]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Check out the frozen Python baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 40382e2107a899e428cad2ab6b1d3132c90d3dcf
+          path: baseline-40382e2
+          persist-credentials: false
+      - id: python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Generate the corpora before any timing
+        env:
+          PY314: ${{ steps.python.outputs.python-path }}
+        run: |
+          "$PY314" -I -B experiments/native-distribution/bench/gen_corpora.py --out "$RUNNER_TEMP/corpora"
+      - name: Measure seven paired rounds as bench/contract.json declares
+        env:
+          ARCH: ${{ matrix.arch }}
+          PY314: ${{ steps.python.outputs.python-path }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          "$PY314" -I -B experiments/native-distribution/bench/measure.py \
+            --baseline baseline-40382e2 --corpora "$RUNNER_TEMP/corpora" \
+            --python314 "$PY314" --python312 /usr/bin/python3 \
+            --label "hosted-$ARCH" --source-sha "$SOURCE_SHA" \
+            --out "$RUNNER_TEMP/measure-$ARCH.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: measure-${{ matrix.arch }}
+          path: ${{ runner.temp }}/measure-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 30

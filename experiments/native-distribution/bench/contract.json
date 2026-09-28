@@ -1,0 +1,58 @@
+{
+  "status": "PREDECLARED before any Gate X candidate timing. bench/measure.py records this file's sha256 with every result. Changing it after seeing results starts a new experiment; it does not amend this one.",
+  "scope": "Captured-driver work of the hidden Unicode check only: capture decoding, checks and per-line reporting in a fresh process. Not a complete action, not Git, not event parsing, not a job or billing claim.",
+  "rounds": 7,
+  "warmup_rounds": 1,
+  "warmup_use": "Recorded as first-run observations; never part of a median or a decision.",
+  "seed": 20260928,
+  "order": "Every round runs each (case, contestant) pair exactly once, in the order of random.Random(seed * 100 + round).shuffle over the sorted pairs. The order is recorded.",
+  "cases": [
+    "idle",
+    "pr-typical",
+    "ascii-src-L",
+    "md-unicode-L",
+    "cjk-L",
+    "sparse-M",
+    "dense-M",
+    "bidi-short-M",
+    "bidi-long-3400",
+    "ideo-latin-150",
+    "lock-oneline-3.8M",
+    "limit-stop-M"
+  ],
+  "case_generation": "bench/gen_corpora.py, before the clock starts; every capture must hash to its pinned value.",
+  "contestants": {
+    "python-faithful": "CPython 3.14 (unicodedata 16.0.0), agent_guardrails at 40382e2 verified by hash, bench/py_driver.py faithful. The parity oracle and the decision baseline.",
+    "python-tuned": "The same interpreter with bench/hidden_tuned.py swapped in: the named optimized Python, never a substitute baseline.",
+    "rust-packaged": "bash launch.sh with the committed asset for this machine: platform selection, mktemp -d under a harness-owned RUNNER_TEMP, gzip -d, chmod, the native drive, and removal of the directory. The decision candidate.",
+    "rust-extracted": "Component only: the same ELF, extracted once before timing, drive only. Separates native startup plus checking from packaging.",
+    "gunzip-only": "Component only: gzip -d -c of the committed asset into a file. Separates decompression from everything else.",
+    "python312-control": "Control only, when the runner has it: the system python3 3.12 (unicodedata 15.0.0) with the faithful driver. Its parity is reported, not required, and it is not a decision input."
+  },
+  "boundaries": {
+    "wall_ns": "time.perf_counter_ns() immediately before starting the process to immediately after os.wait4 reaps it; a pidfd wakes the harness at exit.",
+    "cpu_s": "ru_utime + ru_stime from os.wait4, which include the children that process waited for (gzip and the binary under the launcher).",
+    "maxrss_kib": "ru_maxrss from os.wait4: the largest resident set of the process and the children it waited for.",
+    "output": "exit status, stdout length and sha256, stderr length. stdout and stderr go to regular files.",
+    "cleanup": "After every rust-packaged run the harness-owned RUNNER_TEMP must be empty again."
+  },
+  "parity": "In every timed and warmup run of every case, rust-packaged, rust-extracted and python-tuned must match python-faithful's exit status and stdout bytes, with empty stderr. Any mismatch, timeout, unexpected exit status or leftover RUNNER_TEMP entry fails the gate. Gate U's accepted UCD 16 differences do not apply: python-faithful already uses UCD 16.",
+  "decision": {
+    "small_cases": ["idle", "pr-typical"],
+    "small_rule": "median(rust-packaged) - median(python-faithful) <= max(5 ms, 5% of median(python-faithful))",
+    "large_cases": ["ascii-src-L", "md-unicode-L"],
+    "large_rule": "median(python-faithful) - median(rust-packaged) >= 100 ms and >= 20% of median(python-faithful)",
+    "paired_difference": "For each case and round, rust-packaged wall minus python-faithful wall of the same round.",
+    "uncertainty": "The median and the [min, max] of the seven paired differences. With seven rounds, [min, max] is a distribution-free 98.4% interval for the median paired difference (sign test).",
+    "verdict": "PASS when the medians satisfy the rule and the whole paired interval does too; FAIL when the medians violate it and the whole interval does too; INCONCLUSIVE otherwise.",
+    "gate": "Captured-driver part of Gate X passes on an architecture only if parity holds everywhere and every small and large rule is PASS. It never passes on emulated hardware: an emulated result is labelled and kept for correctness only."
+  },
+  "rerun_policy": "At most one follow-up measurement, only for a methodological defect named and recorded before it starts. Never to obtain a different winner.",
+  "deadline_per_run_s": 120,
+  "not_measured_here": [
+    "action download and preparation by the runner (ci/transfer-template.yml)",
+    "queue and runner allocation time",
+    "Git acquisition, event parsing, identity and attribution checks",
+    "a complete action or job"
+  ]
+}

@@ -1,0 +1,28 @@
+[package]
+name = "agent-guardrails-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "EXPERIMENTAL Gate X spike: the hidden Unicode drive benchmark, packaged as a native binary. Not the required check."
+license = "MIT"
+
+# Standard library only. The Unicode properties the drive needs (Python's
+# category, bidi class, name-derived script, isdigit, \w) come from generated
+# ASCII tables in src/tables.rs, not from crates.
+[dependencies]
+
+[[bin]]
+name = "agent-guardrails"
+path = "src/main.rs"
+
+# The profile a production binary would use: unwinding, so a panic reaches the
+# sanitized boundary in main() instead of aborting. The benchmark prototype
+# used panic = "abort"; that is deliberately not carried over.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = true
+debug = false
+incremental = false

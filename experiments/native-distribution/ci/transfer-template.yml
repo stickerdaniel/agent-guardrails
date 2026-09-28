@@ -1,0 +1,114 @@
+# TEMPLATE, not a workflow yet. EXPERIMENTAL Gate X transfer measurement for
+# the unmerged spike pull request only.
+#
+# A workflow cannot name the commit that contains it, so the maintainer adds
+# this file in a second commit, after the first is pushed:
+#   1. Replace __SOURCE_SHA__ with the full SHA of the pushed commit that
+#      added experiments/native-distribution.
+#   2. Save it as .github/workflows/native-distribution-transfer.yaml. The
+#      repository's pin test globs *.yml and requires a "# vX.Y.Z" comment,
+#      which a reference to an unreleased spike commit cannot truthfully
+#      carry; the .yaml name keeps that test's claim intact rather than
+#      inventing a version. Say so in the pull request.
+#   3. It runs once, when the pull request is marked ready for review, not on
+#      every push: 28 fresh jobs per run.
+#
+# Each round pairs two fresh jobs on the same runner label with identical
+# steps except the one remote action each names, which the runner downloads
+# during "Set up job":
+#   candidate: the native spike action at __SOURCE_SHA__, then run on the
+#              typical capture;
+#   control:   the Python action at the frozen baseline 40382e2, named by a
+#              step whose condition is never true, so that only its download
+#              happens. That a skipped step's action is still downloaded is
+#              expected runner behaviour, not yet observed here: check each
+#              control log for its "Download action repository" line.
+# The job log's per-line timestamps have sub-second resolution and are the
+# measurement; the steps API's whole-second times are not. Queue time is
+# outside both. The in-job markers bracket the remote action step and a
+# direct run of the same launcher from the checkout.
+name: Native distribution transfer
+
+on:
+  pull_request:
+    types: [ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: candidate (${{ matrix.arch }}, round ${{ matrix.round }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        round: [1, 2, 3, 4, 5, 6, 7]
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Mark the first step
+        run: echo "mark first-step $(date +%s%N)"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Generate the typical capture
+        run: python3 -I -B experiments/native-distribution/bench/gen_corpora.py --out "$RUNNER_TEMP/corpora" --case pr-typical
+      - name: Mark before the remote action
+        run: echo "mark before-remote $(date +%s%N)"
+      - name: Native spike action, downloaded from GitHub
+        uses: stickerdaniel/agent-guardrails/experiments/native-distribution@__SOURCE_SHA__
+        with:
+          capture: ${{ runner.temp }}/corpora/pr-typical.cap
+      - name: Mark after the remote action
+        run: echo "mark after-remote $(date +%s%N)"
+      - name: The same launcher, run from the checkout
+        env:
+          AGX_CAPTURE: ${{ runner.temp }}/corpora/pr-typical.cap
+        run: GITHUB_ACTION_PATH="$GITHUB_WORKSPACE/experiments/native-distribution" bash --noprofile --norc -- experiments/native-distribution/launch.sh
+      - name: Mark after the direct run
+        run: echo "mark after-direct $(date +%s%N)"
+
+  control:
+    name: control (${{ matrix.arch }}, round ${{ matrix.round }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+        round: [1, 2, 3, 4, 5, 6, 7]
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Mark the first step
+        run: echo "mark first-step $(date +%s%N)"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Generate the typical capture
+        run: python3 -I -B experiments/native-distribution/bench/gen_corpora.py --out "$RUNNER_TEMP/corpora" --case pr-typical
+      - name: Mark before the skipped remote action
+        run: echo "mark before-remote $(date +%s%N)"
+      - name: Python action at the frozen baseline, downloaded but never run
+        # Rounds start at 1, so this never runs; the step exists to be downloaded.
+        if: matrix.round == 0
+        uses: stickerdaniel/agent-guardrails@40382e2107a899e428cad2ab6b1d3132c90d3dcf
+      - name: Mark after the skipped remote action
+        run: echo "mark after-remote $(date +%s%N)"
+      - name: The same launcher, run from the checkout
+        env:
+          AGX_CAPTURE: ${{ runner.temp }}/corpora/pr-typical.cap
+        run: GITHUB_ACTION_PATH="$GITHUB_WORKSPACE/experiments/native-distribution" bash --noprofile --norc -- experiments/native-distribution/launch.sh
+      - name: Mark after the direct run
+        run: echo "mark after-direct $(date +%s%N)"
