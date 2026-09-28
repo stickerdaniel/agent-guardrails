@@ -160,6 +160,8 @@ def publish(notes_path: str) -> None:
     repository = _env("GITHUB_REPOSITORY")
     release = _api(f"repos/{repository}/releases/tags/{tag}")
     if release is None:
+        # Main or the tag may have moved during the release lookup.
+        check()
         proc = subprocess.run(
             [
                 "gh", "release", "create", tag,

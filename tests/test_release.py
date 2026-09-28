@@ -100,6 +100,14 @@ if len(args) == 2 and args[0] == "api" and args[1].startswith(prefix):
     if state.get("api_status"):
         answer({"message": "Server Error", "status": str(state["api_status"])}, state["api_status"])
     if path.startswith("releases/tags/"):
+        if state.get("move_ref_during_lookup") and not state.get("lookup_moved"):
+            ref, sha = state["move_ref_during_lookup"]
+            subprocess.run(
+                ["git", "--git-dir", state["origin"], "update-ref", ref, sha], check=True,
+            )
+            state["lookup_moved"] = True
+            with open(os.environ["FAKE_GH_STATE"], "w", encoding="utf-8") as handle:
+                json.dump(state, handle)
         release = state["releases"].get(path[len("releases/tags/"):])
         answer(release) if release else answer({"message": "Not Found", "status": "404"}, 404)
     if path.startswith("git/ref/tags/"):
@@ -407,6 +415,32 @@ class WorkflowTests(_OriginTestCase):
         self.assertEqual(run.outcomes, {"verify": "success", "publish": "failure"}, run.logs)
         self.assertIn("is not the current tip of main", run.logs["publish"])
         self.assertEqual(self.origin.gh_calls(), [])
+
+    def test_main_moving_during_release_lookup_prevents_creation(self) -> None:
+        sha = self.origin.tip
+        self.origin.tag("v1.2.3", sha)
+        later = self.origin.commit("Land another change")
+        self.origin.git("push", str(self.origin.bare), f"{later}:refs/heads/staging")
+        self.origin.set_state(move_ref_during_lookup=["refs/heads/main", later])
+
+        run = run_workflow(self.origin, "v1.2.3", sha)
+
+        self.assertEqual(run.outcomes, {"verify": "success", "publish": "failure"}, run.logs)
+        self.assertIn("is not the current tip of main", run.logs["publish"])
+        self.assertEqual(self.origin.creates(), [])
+
+    def test_tag_moving_during_release_lookup_prevents_creation(self) -> None:
+        sha = self.origin.tip
+        self.origin.tag("v1.2.3", sha)
+        later = self.origin.commit("Land another change")
+        self.origin.git("push", str(self.origin.bare), f"{later}:refs/heads/staging")
+        self.origin.set_state(move_ref_during_lookup=["refs/tags/v1.2.3", later])
+
+        run = run_workflow(self.origin, "v1.2.3", sha)
+
+        self.assertEqual(run.outcomes, {"verify": "success", "publish": "failure"}, run.logs)
+        self.assertEqual(self.origin.creates(), [])
+        self.assertIn("v1.2.3 on origin names", run.logs["publish"])
 
     def test_only_a_tag_push_starts_it(self) -> None:
         workflow = yamlsubset.load(_WORKFLOW.read_text(encoding="utf-8"))
