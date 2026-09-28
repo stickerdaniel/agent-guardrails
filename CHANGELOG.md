@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Input `hidden-unicode`: with `warn`, hidden Unicode findings are warnings; every other finding still fails
 - Fails closed: an invalid event or input, a head that moved since the event, a base commit missing from the fetched history, and an empty commit range all fail the run
 - A new-side binary file fails unless its extension is a listed binary format; invalid UTF-8 added lines and paths fail, as do undecodable mode-only destinations
-- Inspection limits: 64 MiB of Git standard output, 600 seconds for Git calls, 100 million scan-work units, and 1,000 findings; exceeding any limit fails even in `warn` mode
+- Inspection limits: 64 MiB of Git standard output, two million output records, 600 seconds for Git calls, 100 million scan-work units, 1,000 findings, four million characters per line, and 100,000 suspicious characters per line; exceeding any limit fails even in `warn` mode
 
 ### Fixed
 

@@ -39,7 +39,7 @@ Any other value fails the run.
 
 Text is checked on added lines compared with the merge base; a moved file counts as added. Git judges binary content on the **new side**, independently of the old file, when the patch is binary or has no text hunk. A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`; those and submodules are logged as unscanned. Git's binary classification includes NUL-containing files and files above its big-file threshold. An invalid UTF-8 path or added line fails; a mode-only change also checks the full new file for binary content and valid UTF-8, without treating unchanged lines as additions. Otherwise, unchanged text is not validated. PR `.gitattributes` cannot suppress this check.
 
-A run stops with an error, even with `hidden-unicode: warn`, if Git produces more than 64 MiB of standard output or takes over 600 seconds, or scanning exceeds 100 million work units or 1,000 findings. GitHub displays at most ten error and ten warning annotations per step; findings beyond that display limit still affect the exit status and remain in the log.
+A run stops with an error, even with `hidden-unicode: warn`, if Git exceeds 64 MiB of standard output, two million output records or 600 seconds; scanning also stops past 100 million work units, 1,000 findings, four million characters on one line or 100,000 suspicious characters on one line. GitHub displays at most ten error and ten warning annotations per step; findings beyond that display limit still affect the exit status and remain in the log.
 
 ## Trust model
 
