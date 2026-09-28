@@ -15,8 +15,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import Callable
+from functools import partial
+from typing import IO, Callable
 
 from .event import Settings
 
@@ -27,6 +30,28 @@ _VERSION = re.compile(r"git version (\d+)\.(\d+)")
 _MINIMUM_VERSION = (2, 31)
 _NO_GIT = "git is not on PATH. This action needs git 2.31 or newer."
 _OLD_GIT = "This action needs git 2.31 or newer."
+
+# What one run may spend on git. Running out fails the check in either mode:
+# a pull request read in part is not clean. The output limit counts stdout of
+# every git call together, while it is read, so the parsed copies held in
+# memory stay a small multiple of it. 64 MiB is far above the -U0 patch of a
+# regenerated lockfile, and the Unicode check scans that much text in about
+# half a minute at worst (see rules.WORK_LIMIT). The time limit covers the
+# fetch of the full history and every other git call; a stuck git would
+# otherwise hold the job until its own timeout, six hours by default. Of
+# stderr only the start is kept, since only an error message comes from it.
+OUTPUT_LIMIT = 64 * 2**20
+TIME_LIMIT = 600
+_ERROR_LIMIT = 4096
+_CHUNK = 65536
+_TOO_MUCH = (
+    "not fully checked: git printed more than {limit} MiB for this pull request, "
+    "the most this action reads"
+)
+_TOO_SLOW = (
+    "not fully checked: reading this pull request with git took longer than "
+    "{limit} seconds, the most this action allows"
+)
 
 # Both readings of the changed files share these options. No rename
 # detection, so moved content counts as added. T keeps a symlink or submodule
@@ -84,8 +109,11 @@ class ChangedFile:
     """A file the pull request adds or changes, compared with the merge base.
 
     kind is one of TEXT, ALLOWED_BINARY, REJECTED_BINARY, UNDECODABLE and
-    SUBMODULE. Only a TEXT file has added lines: (line number in the new file,
-    text without its line ending)."""
+    SUBMODULE, and describes the new side: git's reading of the new file, not
+    of the pair. Only a TEXT file has added lines: (line number in the new
+    file, text without its line ending). When the old side was binary every
+    line of the new file is added. When only the mode changed nothing is
+    added, and TEXT means the whole new file is valid UTF-8."""
 
     path: str
     status: str
@@ -117,6 +145,45 @@ def encode_credential(token: str) -> str:
     return base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
 
 
+class _Reader(threading.Thread):
+    """Drains one pipe of a git process and keeps at most limit bytes of it.
+    With overflow set, more than limit is an error and stops git at once;
+    without, the rest is read and dropped so git never blocks on a full pipe."""
+
+    def __init__(self, pipe: IO[bytes], limit: int, overflow: Callable[[], None] | None = None):
+        super().__init__(daemon=True)
+        self._pipe = pipe
+        self._limit = limit
+        self._overflow = overflow
+        self._chunks: list[bytes] = []
+        self._size = 0
+        self.cut = False
+        self.exceeded = False
+        # Set only at the end of the stream. Anything else is a partial read.
+        self.complete = False
+        self.start()
+
+    def run(self) -> None:
+        try:
+            while chunk := self._pipe.read1(_CHUNK):
+                room = self._limit - self._size
+                if room > 0:
+                    self._chunks.append(chunk[:room])
+                    self._size += min(room, len(chunk))
+                if len(chunk) > room:
+                    self.cut = True
+                if self.cut and self._overflow is not None and not self.exceeded:
+                    self.exceeded = True
+                    self._overflow()
+        except (OSError, ValueError):
+            return
+        self.complete = True
+
+    @property
+    def data(self) -> bytes:
+        return b"".join(self._chunks)
+
+
 class _Repository:
     def __init__(self, root: str, settings: Settings, credential: str) -> None:
         self.root = root
@@ -127,6 +194,8 @@ class _Repository:
         self._header_key = f"http.{settings.server_url}/.extraheader"
         self._header = f"AUTHORIZATION: basic {credential}"
         self._secrets = (settings.token, credential)
+        self._output_left = OUTPUT_LIMIT
+        self._deadline = time.monotonic() + TIME_LIMIT
 
     def environment(self, *, authenticated: bool = False) -> dict[str, str]:
         """The whole environment of a git call. The credential travels as
@@ -163,14 +232,18 @@ class _Repository:
         return text
 
     def run(self, *args: str, authenticated: bool = False) -> subprocess.CompletedProcess:
+        """Run git within what is left of the run's output and time limits,
+        or raise GitError. Both limits are enforced while git runs."""
+        too_slow = _TOO_SLOW.format(limit=TIME_LIMIT)
+        if time.monotonic() >= self._deadline:
+            raise GitError(too_slow)
         try:
-            return subprocess.run(
+            proc = subprocess.Popen(
                 ["git", *args],
                 env=self.environment(authenticated=authenticated),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                check=False,
             )
         except FileNotFoundError:
             raise GitError(_NO_GIT) from None
@@ -178,6 +251,37 @@ class _Repository:
             raise GitError(
                 f"git {args[0]} could not start: {type(error).__name__}"
             ) from None
+        stdout = _Reader(proc.stdout, self._output_left, overflow=proc.kill)
+        stderr = _Reader(proc.stderr, _ERROR_LIMIT)
+        timed_out = False
+        try:
+            proc.wait(timeout=max(0, self._deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            proc.wait()
+        # A process git started can hold the pipes open after git is gone, so
+        # the readers get what is left of the time, and a second to see the
+        # end of a git that was stopped.
+        for reader in (stdout, stderr):
+            reader.join(max(1, self._deadline - time.monotonic()))
+        if stdout.is_alive() or stderr.is_alive():
+            raise GitError(too_slow)
+        proc.stdout.close()
+        proc.stderr.close()
+        if timed_out:
+            raise GitError(too_slow)
+        if stdout.exceeded:
+            raise GitError(_TOO_MUCH.format(limit=OUTPUT_LIMIT // 2**20))
+        if not (stdout.complete and stderr.complete):
+            raise GitError(f"git {args[0]} failed: its output could not be read")
+        output = stdout.data
+        self._output_left -= len(output)
+        errors = stderr.data
+        if stderr.cut:
+            # A secret cut off at the end could not be redacted whole.
+            errors = errors[: max(0, len(errors) - max(len(secret) for secret in self._secrets))]
+        return subprocess.CompletedProcess(proc.args, proc.returncode, output, errors)
 
     def git(self, *args: str, authenticated: bool = False) -> bytes:
         """Run git and return its output. On failure only git's own stderr,
@@ -292,30 +396,40 @@ def _commits(repo: _Repository, revision_range: str) -> list[Commit]:
 
 def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]:
     """Every added or changed file with its added lines. The raw listing
-    names each file, its status and its modes exactly; the patch supplies the
-    lines. A type change prints as a deletion followed by a creation, so it
-    owns two sections of the patch."""
+    names each file, its status, its modes and its new blob exactly; the patch
+    supplies the lines. A type change prints as a deletion followed by a
+    creation, so it owns two sections of the patch."""
     entries = _raw_entries(repo.git(*_DIFF, "--raw", "-z", "--no-abbrev", base, head, "--"))
     sections = _sections(
         repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--")
     )
+    empty_blob = None
+
+    def new_side(blob: str) -> _Section:
+        nonlocal empty_blob
+        if empty_blob is None:
+            empty_blob = _write_empty_blob(repo)
+        return _new_side(repo, empty_blob, blob)
+
     files = []
     index = 0
-    for status, old_mode, new_mode, path in entries:
+    for status, old_mode, new_mode, blob, path in entries:
         group = []
         while index < len(sections) and _names_path(sections[index].header, path):
             group.append(sections[index])
             index += 1
         if len(group) != (2 if status == "T" else 1):
             raise GitError(_UNPARSABLE)
-        files.append(_classify(path, status, old_mode, new_mode, group[-1]))
+        files.append(
+            _classify(path, status, old_mode, new_mode, group[-1], partial(new_side, blob))
+        )
     if index != len(sections):
         raise GitError(_UNPARSABLE)
     return files
 
 
-def _raw_entries(raw: bytes) -> list[tuple[str, str, str, bytes]]:
-    """(status, old mode, new mode, path) from diff --raw -z."""
+def _raw_entries(raw: bytes) -> list[tuple[str, str, str, str, bytes]]:
+    """(status, old mode, new mode, new object, path) from diff --raw -z."""
     fields = raw.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()
@@ -329,12 +443,35 @@ def _raw_entries(raw: bytes) -> list[tuple[str, str, str, bytes]]:
             or not parts[0].startswith(":")
             or not _MODE.fullmatch(parts[0][1:])
             or not _MODE.fullmatch(parts[1])
+            or not _SHA.fullmatch(parts[3])
             or parts[4] not in _STATUSES
             or not path
         ):
             raise GitError(_UNPARSABLE)
-        entries.append((parts[4], parts[0][1:], parts[1], path))
+        entries.append((parts[4], parts[0][1:], parts[1], parts[3], path))
     return entries
+
+
+def _write_empty_blob(repo: _Repository) -> str:
+    """The empty blob, written into the temporary repository so that git can
+    compare a new file with nothing. stdin is empty for every git call."""
+    blob = repo.git("hash-object", "-w", "--stdin").decode("ascii", "replace").strip()
+    if not _SHA.fullmatch(blob):
+        raise GitError(_UNPARSABLE)
+    return blob
+
+
+def _new_side(repo: _Repository, empty_blob: str, blob: str) -> _Section:
+    """git's reading of a new file on its own: the empty blob against it.
+    Binary if git calls it binary, otherwise every line of it as added. The
+    blob comes from the raw listing, so it is part of the fetched head."""
+    patch = repo.git(*_DIFF, "-U0", "--src-prefix=a/", "--dst-prefix=b/", empty_blob, blob)
+    sections = _sections(patch)
+    if not sections and blob == empty_blob:
+        return _Section(b"")
+    if len(sections) != 1 or sections[0].header != f"a/{empty_blob} b/{blob}".encode():
+        raise GitError(_UNPARSABLE)
+    return sections[0]
 
 
 def _sections(raw: bytes) -> list[_Section]:
@@ -368,6 +505,9 @@ def _sections(raw: bytes) -> list[_Section]:
             old = 1 if hunk[1] is None else int(hunk[1])
             number = int(hunk[2])
             new = 1 if hunk[3] is None else int(hunk[3])
+            # git prints no hunk that changes nothing.
+            if not (old or new):
+                raise GitError(_UNPARSABLE)
             section.in_hunks = True
         elif section.in_hunks:
             if not row.startswith(b"\\"):
@@ -375,6 +515,9 @@ def _sections(raw: bytes) -> list[_Section]:
         elif row.startswith(b"Binary files ") and row.endswith(b" differ"):
             section.binary = True
         # Anything else before the first hunk is an extended header line.
+    # The last hunk promised lines that never came: its additions are partial.
+    if old or new:
+        raise GitError(_UNPARSABLE)
     return sections
 
 
@@ -419,10 +562,15 @@ def _unquote(raw: bytes, start: int) -> tuple[bytes, int]:
 
 
 def _classify(
-    raw_path: bytes, status: str, old_mode: str, new_mode: str, section: _Section
+    raw_path: bytes,
+    status: str,
+    old_mode: str,
+    new_mode: str,
+    section: _Section,
+    read_new_side: Callable[[], _Section],
 ) -> ChangedFile:
-    """What the new side of a file is. section shows that side: the only
-    section, or a type change's creation."""
+    """What the new side of a file is. section is the file's own section, or
+    a type change's creation, whose old side is empty."""
     try:
         path = raw_path.decode("utf-8")
     except UnicodeDecodeError:
@@ -432,6 +580,13 @@ def _classify(
         # A commit of another repository. Its "Subproject commit" line is
         # git's own text, not content.
         return ChangedFile(path, status, old_mode, new_mode, SUBMODULE)
+    mode_only = False
+    if status == "M" and (section.binary or not section.in_hunks):
+        # A patch between two sides is binary when either side is, and has
+        # no hunk when only the mode changed. Neither says what the new side
+        # is, so git reads that side on its own.
+        mode_only = not section.binary
+        section = read_new_side()
     if section.binary:
         extension = posixpath.splitext(path)[1][1:].lower()
         kind = ALLOWED_BINARY if extension in BINARY_EXTENSIONS else REJECTED_BINARY
@@ -442,4 +597,5 @@ def _classify(
         )
     except UnicodeDecodeError:
         return ChangedFile(path, status, old_mode, new_mode, UNDECODABLE)
-    return ChangedFile(path, status, old_mode, new_mode, TEXT, added)
+    # A mode change adds no line, even though the whole file was decoded.
+    return ChangedFile(path, status, old_mode, new_mode, TEXT, () if mode_only else added)

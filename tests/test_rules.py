@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 
 from agent_guardrails import rules
@@ -48,6 +49,21 @@ class CommitTrailerTests(unittest.TestCase):
             rules.check_commit(_commit("Fix\n\nCo-authored-by: Jane <jane@example.com>\n")),
             [],
         )
+
+    def test_trailer_separated_by_other_whitespace_fails(self) -> None:
+        findings = rules.check_commit(
+            _commit("Fix\n\nCo-authored-by:\t \tClaude <noreply@anthropic.com>\n")
+        )
+        self.assertEqual(_titles(findings), ["Bot co-author trailer in a commit"])
+        self.assertEqual(
+            rules.check_commit(_commit("Fix\n\nCo-authored-by:<noreply@anthropic.com>\n")), []
+        )
+
+    def test_long_run_of_spaces_is_read_in_linear_time(self) -> None:
+        start = time.monotonic()
+        self.assertEqual(rules.bot_trailers("co-authored-by:" + " " * 300_000 + "<x"), [])
+        # Backtracking over every split of the run took about half a minute.
+        self.assertLess(time.monotonic() - start, 2)
 
     def test_address_in_prose_passes(self) -> None:
         self.assertEqual(

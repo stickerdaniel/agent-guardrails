@@ -3,7 +3,9 @@ upstream no-ai-marks tests/test_chars.py at 747c07a, without its helpers."""
 
 from __future__ import annotations
 
+import time
 import unittest
+from unittest import mock
 
 from agent_guardrails import gitdata, rules
 
@@ -178,6 +180,66 @@ class ModeTests(unittest.TestCase):
         for kind in (gitdata.ALLOWED_BINARY, gitdata.SUBMODULE):
             with self.subTest(kind=kind):
                 self.assertEqual(rules.check_changed_file(_changed("logo.png", kind), "error"), [])
+
+
+class LimitTests(unittest.TestCase):
+    """The vendored scanner reads a whole line again at each bidi isolate on
+    a right-to-left line and at each ideographic space. Such a line is
+    charged before the scan, and running out fails in either mode."""
+
+    def _stops_before_scanning(self, line: str) -> None:
+        for mode in ("error", "warn"):
+            with self.subTest(mode=mode):
+                start = time.monotonic()
+                with self.assertRaisesRegex(
+                    rules.LimitReached, "^not fully checked: the hidden Unicode check stopped at the PR body"
+                ):
+                    _text(line, mode=mode)
+                # The scan itself would take tens of seconds.
+                self.assertLess(time.monotonic() - start, 2)
+
+    def test_balanced_isolates_on_a_right_to_left_line(self) -> None:
+        self._stops_before_scanning("\u05d0" + "\u2066\u2069" * 20_000)
+
+    def test_ideographic_spaces_without_cjk(self) -> None:
+        self._stops_before_scanning("a" * 10_000 + "\u3000" * 10_000)
+
+    def test_lines_below_the_limit_are_scanned(self) -> None:
+        self.assertEqual(_text("\u05d0" + "\u2066\u2069" * 1000), [])
+        self.assertEqual(_text("こんにちは\u3000" * 1000), [])
+        (finding,) = _file_line("a" * 1_000_000 + "\u200b", number=1)
+        self.assertEqual((finding.title, finding.line), (_INVISIBLE, 1))
+
+    def test_work_is_counted_across_the_run(self) -> None:
+        budget = rules.Budget()
+        with mock.patch.object(rules, "WORK_LIMIT", 1000):
+            rules.check_unicode("x" * 600, "the PR title", "error", budget)
+            with self.assertRaisesRegex(rules.LimitReached, "stopped at line 2 of the PR body"):
+                rules.check_unicode("y" * 300 + "\n" + "z" * 300, "the PR body", "error", budget)
+
+    def test_findings_limit(self) -> None:
+        with mock.patch.object(rules, "FINDINGS_LIMIT", 3):
+            self.assertEqual(len(_text("a\u200b\n" * 3, mode="warn")), 3)
+            with self.assertRaisesRegex(rules.LimitReached, "stopped after 3 findings") as caught:
+                _text("a\u200b\n" * 4, mode="warn")
+        self.assertEqual(len(caught.exception.findings), 3)
+
+    def test_findings_limit_counts_every_check(self) -> None:
+        budget = rules.Budget()
+        trailer = "Co-authored-by: Claude <noreply@anthropic.com>\n"
+        with mock.patch.object(rules, "FINDINGS_LIMIT", 2):
+            rules.check_body(trailer, budget)
+            rules.check_changed_file(_changed("x.md", gitdata.UNDECODABLE), "warn", budget)
+            with self.assertRaises(rules.LimitReached):
+                rules.check_commit(gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailer), budget)
+
+    def test_quotes_in_messages_are_bounded(self) -> None:
+        (word,) = _text("pay " + "p" + "\u0430" * 100_000)
+        self.assertIn("the word 'p" + "\u0430" * 199 + "...'", word.message)
+        self.assertLess(len(word.message), 1000)
+        (payload,) = _text("x" + _tags("a" * 100_000))
+        self.assertIn("(hidden text: '" + "a" * 200 + "...')", payload.message)
+        self.assertLess(len(payload.message), 2000)
 
 
 if __name__ == "__main__":

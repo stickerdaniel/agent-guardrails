@@ -116,6 +116,72 @@ class ReaderTests(_ChangedFileTestCase):
         head = self.remote.commit("Add", files={"latin1.txt": b"caf\xe9\n"})
         self.assertEqual(self._files(head)["latin1.txt"].kind, gitdata.UNDECODABLE)
 
+    def test_kind_is_that_of_the_new_side(self) -> None:
+        # Git prints a binary patch when either side is binary.
+        self.new_base(
+            **{
+                "x.png": b"PNG\0",
+                "data.bin": b"\0\1",
+                "notes.md": "text\n",
+                "logo.png": "text\n",
+                "photo.png": b"\x89PNG\0a",
+            }
+        )
+        head = self.remote.commit(
+            "Replace",
+            files={
+                "x.png": f"new{_ZWSP}text\nmore\n",
+                "data.bin": f"a{_ZWSP}b\n",
+                "notes.md": b"a\0b\n",
+                "logo.png": b"\x89PNG\0",
+                "photo.png": b"\x89PNG\0b",
+            },
+        )
+
+        files = self._files(head)
+
+        expected = {
+            "x.png": (gitdata.TEXT, ((1, f"new{_ZWSP}text"), (2, "more"))),
+            "data.bin": (gitdata.TEXT, ((1, f"a{_ZWSP}b"),)),
+            "notes.md": (gitdata.REJECTED_BINARY, ()),
+            "logo.png": (gitdata.ALLOWED_BINARY, ()),
+            "photo.png": (gitdata.ALLOWED_BINARY, ()),
+        }
+        for path, (kind, added) in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual((files[path].status, files[path].kind, files[path].added), ("M", kind, added))
+
+    def test_mode_change_reads_the_new_file_and_adds_no_line(self) -> None:
+        contents = {
+            "notes.md": f"a\0b{_ZWSP}\n".encode(),
+            "logo.png": b"PNG\0",
+            "latin1.txt": b"caf\xe9\n",
+            "plain.md": f"a{_ZWSP}b\n",
+            "empty.sh": "",
+        }
+        self.new_base(**contents)
+        for name in contents:
+            (self.remote.work / name).chmod(0o755)
+            self.remote.git("add", name)
+        head = self.remote.commit("Make executable")
+
+        files = self._files(head)
+
+        expected = {
+            "notes.md": gitdata.REJECTED_BINARY,
+            "logo.png": gitdata.ALLOWED_BINARY,
+            "latin1.txt": gitdata.UNDECODABLE,
+            "plain.md": gitdata.TEXT,
+            "empty.sh": gitdata.TEXT,
+        }
+        for path, kind in expected.items():
+            with self.subTest(path=path):
+                changed = files[path]
+                self.assertEqual(
+                    (changed.status, changed.old_mode, changed.new_mode, changed.kind, changed.added),
+                    ("M", "100644", "100755", kind, ()),
+                )
+
 
 class DriverTests(_ChangedFileTestCase):
     """The entrypoint exactly as action.yml starts it."""
@@ -183,6 +249,44 @@ class DriverTests(_ChangedFileTestCase):
         self.assertIn("agent-guardrails: not scanned (binary): img/logo.png\n", result.stdout)
         self.assertIn("agent-guardrails: not scanned (submodule): sub\n", result.stdout)
         self.assertIn("checked 1 commit, 2 changed files", result.stdout)
+
+    def test_binary_replaced_by_text_is_scanned(self) -> None:
+        self.new_base(**{"x.png": b"PNG\0", "data.bin": b"\0\1"})
+        head = self.remote.commit(
+            "Replace", files={"x.png": f"new{_ZWSP}text\n", "data.bin": f"a{_ZWSP}b\n"}
+        )
+        result = self._run(head)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("::error file=x.png,line=1,title=Invisible character::", result.stdout)
+        self.assertIn("::error file=data.bin,line=1,title=Invisible character::", result.stdout)
+        self.assertNotIn("not scanned", result.stdout)
+
+    def test_mode_change_judges_the_new_file_in_warn_mode_too(self) -> None:
+        contents = {
+            "notes.md": f"a\0b{_ZWSP}\n".encode(),
+            "logo.png": b"PNG\0",
+            "latin1.txt": b"caf\xe9\n",
+            "plain.md": f"a{_ZWSP}b\n",
+        }
+        self.new_base(**contents)
+        for name in contents:
+            (self.remote.work / name).chmod(0o755)
+            self.remote.git("add", name)
+        head = self.remote.commit("Make executable")
+        result = self._run(head, mode="warn")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "::error file=notes.md,title=Cannot scan a changed file::cannot scan notes.md: binary content.",
+            result.stdout,
+        )
+        self.assertIn(
+            "::error file=latin1.txt,title=Cannot scan a changed file::cannot decode latin1.txt",
+            result.stdout,
+        )
+        self.assertIn("agent-guardrails: not scanned (binary): logo.png\n", result.stdout)
+        # Nothing was added to plain.md, so its old line is not a finding.
+        self.assertNotIn("plain.md", result.stdout)
+        self.assertIn("checked 1 commit, 4 changed files", result.stdout)
 
     def test_undecodable_file_fails(self) -> None:
         head = self.remote.commit("Add", files={"latin1.txt": b"caf\xe9\n"})
@@ -259,6 +363,31 @@ class DriverTests(_ChangedFileTestCase):
         self.assertEqual(failed.returncode, 1, failed.stdout)
         self.assertIn("::error title=Bot co-author trailer in a commit::", failed.stdout)
         self.assertIn("::warning file=x.md,line=1,title=Invisible character::", failed.stdout)
+
+    def test_body_too_costly_to_scan_fails_in_warn_mode(self) -> None:
+        # Each isolate on a right-to-left line makes the scanner read the
+        # whole line again.
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        body = "\u05d0" + "\u2066\u2069" * 6000
+        result = self._run(head, body=body, mode="warn")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "stopped at the PR body",
+            result.stdout,
+        )
+        # It stopped before fetching anything.
+        self.assertNotIn("git version", result.stdout)
+
+    def test_more_findings_than_the_limit_fail_in_warn_mode(self) -> None:
+        head = self.remote.commit("Add x", files={"x.md": f"a{_ZWSP}b\n" * 1001})
+        result = self._run(head, mode="warn")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stdout.count("::warning file=x.md,"), 1000)
+        self.assertIn(
+            "::error title=agent-guardrails::not fully checked: stopped after 1000 findings",
+            result.stdout,
+        )
 
 
 if __name__ == "__main__":

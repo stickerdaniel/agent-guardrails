@@ -27,37 +27,13 @@ def _check(environ: Mapping[str, str], out: Reporter) -> int:
         out.failure(str(error))
         return 1
 
-    mode = settings.hidden_unicode
-    findings = rules.check_body(settings.body)
-    findings += rules.check_attribution(
-        settings.body, settings.login, settings.require_model_attribution
-    )
-    findings += rules.check_unicode(settings.title, "the PR title", mode)
-    # The raw body, Macroscope block included: all of it can reach the squash
-    # commit message.
-    findings += rules.check_unicode(settings.body, "the PR body", mode)
-
-    credential = gitdata.encode_credential(settings.token)
-    out.mask(credential)
+    findings: list[rules.Finding] = []
     try:
-        pull_request = gitdata.fetch_pull_request(settings, credential, out.log)
+        pull_request = _inspect(settings, out, findings)
     except gitdata.GitError as error:
-        for finding in findings:
-            out.finding(finding)
-        out.failure(str(error))
-        return 1
-
-    for commit in pull_request.commits:
-        findings += rules.check_commit(commit)
-        findings += rules.check_unicode(
-            commit.message, f"the message of commit {commit.sha}", mode
-        )
-    for changed in pull_request.files:
-        if changed.kind == gitdata.ALLOWED_BINARY:
-            out.log(f"not scanned (binary): {changed.path}")
-        elif changed.kind == gitdata.SUBMODULE:
-            out.log(f"not scanned (submodule): {changed.path}")
-        findings += rules.check_changed_file(changed, mode)
+        return _stopped(out, findings, str(error))
+    except rules.LimitReached as error:
+        return _stopped(out, findings + error.findings, str(error))
     for finding in findings:
         out.finding(finding)
 
@@ -72,3 +48,46 @@ def _check(environ: Mapping[str, str], out: Reporter) -> int:
         f"{warnings} warning{'' if warnings == 1 else 's'}"
     )
     return 1 if errors else 0
+
+
+def _stopped(out: Reporter, findings: list[rules.Finding], reason: str) -> int:
+    """What was found before the checks stopped, then why the rest was not
+    checked. A pull request checked in part fails in either mode."""
+    for finding in findings:
+        out.finding(finding)
+    out.failure(reason)
+    return 1
+
+
+def _inspect(
+    settings: event.Settings, out: Reporter, findings: list[rules.Finding]
+) -> gitdata.PullRequest:
+    """Run every check, adding to findings as it goes. Raises GitError or
+    LimitReached when the pull request cannot be checked to the end."""
+    mode = settings.hidden_unicode
+    budget = rules.Budget()
+    findings += rules.check_body(settings.body, budget)
+    findings += rules.check_attribution(
+        settings.body, settings.login, settings.require_model_attribution
+    )
+    findings += rules.check_unicode(settings.title, "the PR title", mode, budget)
+    # The raw body, Macroscope block included: all of it can reach the squash
+    # commit message.
+    findings += rules.check_unicode(settings.body, "the PR body", mode, budget)
+
+    credential = gitdata.encode_credential(settings.token)
+    out.mask(credential)
+    pull_request = gitdata.fetch_pull_request(settings, credential, out.log)
+
+    for commit in pull_request.commits:
+        findings += rules.check_commit(commit, budget)
+        findings += rules.check_unicode(
+            commit.message, f"the message of commit {commit.sha}", mode, budget
+        )
+    for changed in pull_request.files:
+        if changed.kind == gitdata.ALLOWED_BINARY:
+            out.log(f"not scanned (binary): {changed.path}")
+        elif changed.kind == gitdata.SUBMODULE:
+            out.log(f"not scanned (submodule): {changed.path}")
+        findings += rules.check_changed_file(changed, mode, budget)
+    return pull_request
