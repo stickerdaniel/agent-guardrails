@@ -1,0 +1,48 @@
+name: Agent Guardrails
+description: Fail pull requests in which a coding agent claims authorship through a trailer or a commit identity.
+author: stickerdaniel
+
+inputs:
+  require-model-attribution:
+    description: Require a "Generated with <model>" line as the last non-empty line of the PR body. true or false.
+    required: false
+    default: "false"
+  hidden-unicode:
+    description: Severity of hidden Unicode findings. error or warn.
+    required: false
+    default: error
+
+runs:
+  using: composite
+  steps:
+    - name: Run agent guardrails
+      shell: bash
+      # Composite actions get no INPUT_* variables, so every value the
+      # entrypoint reads is named here.
+      env:
+        CA_REQUIRE_MODEL_ATTRIBUTION: ${{ inputs.require-model-attribution }}
+        CA_HIDDEN_UNICODE: ${{ inputs.hidden-unicode }}
+        CA_TOKEN: ${{ github.token }}
+        CA_SERVER_URL: ${{ github.server_url }}
+        CA_REPOSITORY: ${{ github.repository }}
+        CA_EVENT_NAME: ${{ github.event_name }}
+      run: |
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error title=agent-guardrails::python3 is not on PATH. This action needs Python 3.10 or newer."
+          exit 1
+        fi
+        if ! command -v git >/dev/null 2>&1; then
+          echo "::error title=agent-guardrails::git is not on PATH. This action needs git 2.31 or newer."
+          exit 1
+        fi
+        python3 --version
+        git --version
+        if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+          echo "::error title=agent-guardrails::This action needs Python 3.10 or newer."
+          exit 1
+        fi
+        if ! python3 -I -c 'import re, sys; m = re.match(r"git version (\d+)\.(\d+)", sys.argv[1]); sys.exit(not m or (int(m[1]), int(m[2])) < (2, 31))' "$(git --version)"; then
+          echo "::error title=agent-guardrails::This action needs git 2.31 or newer."
+          exit 1
+        fi
+        python3 -I "$GITHUB_ACTION_PATH/run.py"

@@ -1,0 +1,44 @@
+name: Bug report
+description: A run that failed or passed when it should not have
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If a pull request can get past a check, or a run log shows a token, use private vulnerability reporting instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release tag and commit SHA in your `uses:` line
+      placeholder: v1.0.0 (0123456789abcdef0123456789abcdef01234567)
+    validations:
+      required: true
+  - type: textarea
+    id: caller
+    attributes:
+      label: Caller workflow
+      description: The workflow file that calls this action
+      render: yaml
+    validations:
+      required: true
+  - type: input
+    id: run
+    attributes:
+      label: Run URL
+      description: A link to the workflow run
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: The annotation or log lines the run printed
+    validations:
+      required: true

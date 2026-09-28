@@ -1,0 +1,33 @@
+name: Agent Guardrails
+
+# The canonical caller, except that this repository runs its own action. The
+# workflow and the checked-out action both come from the default branch, never
+# from the pull request.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+# Restacking pushes every branch in a stack; a superseded run answers a
+# question nobody is asking any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-bot-coauthors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run agent guardrails
+        uses: ./
+        with:
+          require-model-attribution: true
