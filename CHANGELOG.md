@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-28
+
 ### Added
 
 - Composite action that fails a pull request when a commit message or the PR body carries a bot `Co-authored-by` trailer, or a commit names a coding agent as author or committer
