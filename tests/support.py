@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,45 @@ RUN_PY = ROOT / "run.py"
 TOKEN = "ghs_FAKE0123456789abcdefghijklmnopqrstuv"
 HUMAN = "jane@example.com"
 CLAUDE = "noreply@anthropic.com"
+# A3: every variable a git call may see, besides its GIT_CONFIG_KEY_<n> and
+# GIT_CONFIG_VALUE_<n> pairs.
+GIT_ENVIRONMENT = frozenset({
+    "PATH",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "LANG",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_ATTR_NOSYSTEM",
+    "GIT_TERMINAL_PROMPT",
+    "GIT_DIR",
+    "GIT_CONFIG_COUNT",
+})
+
+
+def git_environment(config_count: int) -> set[str]:
+    """The exact variable names of a git call with that many config pairs."""
+    return set(GIT_ENVIRONMENT) | {
+        f"GIT_CONFIG_{kind}_{index}" for kind in ("KEY", "VALUE") for index in range(config_count)
+    }
+
+# The workflow commands the action writes itself: the mask, and annotations
+# whose properties are escaped, so they hold no raw ":" or ",".
+_OWN_COMMAND = re.compile(
+    r"::add-mask::[A-Za-z0-9+/=]+"
+    r"|::(error|warning) (file=[^:,]*,(line=[0-9]+,)?)?title=[^:,]*::.*"
+)
+
+
+def foreign_commands(output: str) -> list[str]:
+    """Lines of output that the Actions runner would read as a workflow
+    command the action did not write. actions/runner reads a line as one when,
+    after TrimStart, it starts with "::" (ActionCommand.TryParseV2), and when
+    "##[" occurs anywhere in it (the legacy TryParse, an unanchored IndexOf)."""
+    return [
+        line
+        for line in output.splitlines()
+        if "##[" in line or (line.lstrip().startswith("::") and not _OWN_COMMAND.fullmatch(line))
+    ]
 
 
 def git_env(home: Path, **extra: str) -> dict[str, str]:

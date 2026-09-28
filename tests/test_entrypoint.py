@@ -9,7 +9,7 @@ import unittest
 
 from agent_guardrails import gitdata
 
-from .support import CLAUDE, TOKEN, RemoteTestCase
+from .support import CLAUDE, TOKEN, RemoteTestCase, foreign_commands
 
 _ATTRIBUTION = "Done.\n\nGenerated with Claude Opus 5 for implementation in Claude Code."
 _EMPTY_RANGE = "no commits between base and head"
@@ -94,6 +94,19 @@ class RuleTests(RemoteTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("::error title=Bot co-author trailer in the PR body::", result.stdout)
 
+    def test_command_syntax_in_trailer_names_stays_inert(self) -> None:
+        trailers = (
+            "Co-authored-by: ##[warning]x <noreply@anthropic.com>\n"
+            "Co-authored-by: ::warning::x <cursoragent@cursor.com>\n"
+        )
+        head = self.remote.commit(f"Add x\n\n{trailers}", files={"x.txt": "x\n"})
+        result = self._run(head, body=f"Done.\n\n{trailers}")
+        self.assertEqual(result.returncode, 1)
+        for title in ("Bot co-author trailer in a commit", "Bot co-author trailer in the PR body"):
+            self.assertEqual(result.stdout.count(f"::error title={title}::"), 2, title)
+        self.assertEqual(foreign_commands(result.stdout), [])
+        self.assertEqual(result.stdout.count("<U+0023>#[warning]x"), 4)
+
     def test_reads_event_path_from_environment(self) -> None:
         """A null body read through GITHUB_EVENT_PATH fails only when required."""
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
@@ -153,6 +166,37 @@ class FailClosedTests(RemoteTestCase):
             with self.subTest(ref=ref):
                 result = self.remote.run_action(self.remote.event(head=head, base_ref=ref))
                 self._fails_with("pull_request.base.ref is not a valid branch name", result)
+
+    def _path_with_git(self, script: str | None) -> str:
+        """A PATH whose only git, if any, is the given shell script."""
+        directory = self.remote.root / "fake-bin"
+        directory.mkdir()
+        if script is not None:
+            git = directory / "git"
+            git.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+            git.chmod(0o755)
+        return str(directory)
+
+    def test_missing_git_fails(self) -> None:
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        self.remote.open_pull_request(head)
+        result = self.remote.run_action(
+            self.remote.event(head=head), PATH=self._path_with_git(None)
+        )
+        self._fails_with(
+            "::error title=agent-guardrails::git is not on PATH. This action needs git 2.31 or newer.",
+            result,
+        )
+
+    def test_git_older_than_2_31_fails(self) -> None:
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        self.remote.open_pull_request(head)
+        result = self.remote.run_action(
+            self.remote.event(head=head),
+            PATH=self._path_with_git('echo "git version 2.30.9"'),
+        )
+        self._fails_with("::error title=agent-guardrails::This action needs git 2.31 or newer.", result)
+        self.assertIn("agent-guardrails: git version 2.30.9\n", result.stdout)
 
     def test_malformed_event_fails(self) -> None:
         path = self.remote.root / "event.json"

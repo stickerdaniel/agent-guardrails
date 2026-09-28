@@ -3,15 +3,20 @@ wiring, the dogfood caller, the required check names, and the pins."""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from agent_guardrails import event
 
 from . import yamlsubset
-from .support import ROOT, TOKEN, RemoteTestCase
+from .support import ROOT, TOKEN, RemoteTestCase, git_environment
 
 _WORKFLOWS = ROOT / ".github" / "workflows"
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
@@ -59,12 +64,55 @@ class ActionTests(unittest.TestCase):
         )
 
 
+# Stands in for git on the step's PATH. It appends its arguments and the names
+# in its environment to the file that is also the step's stdout, so git calls
+# and output lines share one timeline, then runs the real git.
+_RECORDER = """\
+#!{python} -I
+import json, os, sys
+record = {{
+    "argv": sys.argv[1:],
+    "env": sorted(os.environ),
+    "config_count": int(os.environ.get("GIT_CONFIG_COUNT", "0")),
+}}
+with open({timeline!r}, "a", encoding="utf-8") as handle:
+    handle.write("@@git " + json.dumps(record) + "\\n")
+os.execv({git!r}, [{git!r}, *sys.argv[1:]])
+"""
+_RECORD = "@@git "
+
+
 @unittest.skipUnless(shutil.which("bash") and shutil.which("python3"), "needs bash and python3")
 class CompositeStepTests(RemoteTestCase):
     """Runs the composite step's script the way the runner would, with the
     expressions in its env block replaced by the caller's values."""
 
-    def _run_step(self, inputs: dict[str, str], body: str) -> subprocess.CompletedProcess:
+    def _recorder(self, timeline: Path) -> Path:
+        """A directory whose git records each call in timeline."""
+        directory = Path(tempfile.mkdtemp(dir=self.remote.root))
+        git = directory / "git"
+        git.write_text(
+            _RECORDER.format(python=sys.executable, timeline=str(timeline), git=shutil.which("git")),
+            encoding="utf-8",
+        )
+        git.chmod(0o755)
+        return directory
+
+    def _interpreter_additions(self) -> set[str]:
+        """Names the recorder's own interpreter adds to what it was given, such
+        as LC_CTYPE from locale coercion. They cannot be told from inherited
+        ones, so the environment check below leaves only these out."""
+        timeline = self.remote.root / "control"
+        given = {"PATH": str(self._recorder(timeline)), "LANG": "C"}
+        subprocess.run(["git", "--version"], env=given, capture_output=True, check=True)
+        (line,) = timeline.read_text(encoding="utf-8").splitlines()
+        return set(json.loads(line[len(_RECORD):])["env"]) - set(given)
+
+    def _run_step(
+        self, inputs: dict[str, str], body: str
+    ) -> tuple[subprocess.CompletedProcess, list[tuple[str, object]]]:
+        """The step's result, with stdout and every git call in the order they
+        happened."""
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
         self.remote.open_pull_request(head)
         context = {
@@ -75,8 +123,10 @@ class CompositeStepTests(RemoteTestCase):
             "github.event_name": "pull_request_target",
         }
         step = _step(_load(ROOT / "action.yml"))
+        timeline = Path(tempfile.mkdtemp(dir=self.remote.root)) / "stdout"
+        path = self.remote.environment(self.remote.root)["PATH"]
         env = {
-            "PATH": self.remote.environment(self.remote.root)["PATH"],
+            "PATH": f"{self._recorder(timeline)}{os.pathsep}{path}",
             "GITHUB_ACTION_PATH": str(ROOT),
             "GITHUB_EVENT_PATH": str(self.remote.event(head=head, body=body)),
             "RUNNER_TEMP": str(self.remote.runner_temp),
@@ -84,26 +134,63 @@ class CompositeStepTests(RemoteTestCase):
         for name, expression in step["env"].items():
             key = re.fullmatch(r"\$\{\{ (\S+) \}\}", expression).group(1)
             env[name] = context[key]
-        return subprocess.run(
-            ["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True, timeout=120
-        )
+        with open(timeline, "a", encoding="utf-8") as stdout:
+            result = subprocess.run(
+                ["bash", "-e", "-c", step["run"]],
+                env=env,
+                stdout=stdout,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120,
+            )
+        events: list[tuple[str, object]] = [
+            ("git", json.loads(line[len(_RECORD):])) if line.startswith(_RECORD) else ("out", line)
+            for line in timeline.read_text(encoding="utf-8").splitlines()
+        ]
+        result.stdout = "".join(f"{line}\n" for kind, line in events if kind == "out")
+        return result, events
 
     def test_inputs_reach_the_entrypoint(self) -> None:
-        required = self._run_step(
+        required, _ = self._run_step(
             {"require-model-attribution": "true", "hidden-unicode": "error"}, body="No line"
         )
         self.assertEqual(required.returncode, 1, required.stdout + required.stderr)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
 
-        optional = self._run_step(
+        optional, _ = self._run_step(
             {"require-model-attribution": "false", "hidden-unicode": "warn"}, body="No line"
         )
         self.assertEqual(optional.returncode, 0, optional.stdout + optional.stderr)
 
-        invalid = self._run_step(
+        invalid, _ = self._run_step(
             {"require-model-attribution": "false", "hidden-unicode": "off"}, body="No line"
         )
         self.assertIn("input hidden-unicode must be error or warn", invalid.stdout)
+
+    def test_no_git_runs_before_the_mask_or_outside_its_environment(self) -> None:
+        """The whole step, preflight included: the job token is in the step's
+        environment, so a git started by the shell would see it unmasked."""
+        additions = self._interpreter_additions()
+        result, events = self._run_step(
+            {"require-model-attribution": "false", "hidden-unicode": "error"}, body=""
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        mask = next(
+            index
+            for index, (kind, line) in enumerate(events)
+            if kind == "out" and line.startswith("::add-mask::")
+        )
+        calls = [(index, record) for index, (kind, record) in enumerate(events) if kind == "git"]
+        # The version check found git on PATH inside the minimal environment.
+        self.assertEqual(calls[0][1]["argv"], ["--version"])
+        self.assertIn("fetch", [record["argv"][0] for _, record in calls])
+        self.assertLess(mask, calls[0][0])
+        for _, record in calls:
+            with self.subTest(command=record["argv"][0]):
+                self.assertEqual(
+                    set(record["env"]) - additions, git_environment(record["config_count"])
+                )
 
 
 class DogfoodCallerTests(unittest.TestCase):

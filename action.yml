@@ -18,7 +18,9 @@ runs:
     - name: Run agent guardrails
       shell: bash
       # Composite actions get no INPUT_* variables, so every value the
-      # entrypoint reads is named here.
+      # entrypoint reads is named here. This environment holds the token, so
+      # no git runs in it: run.py checks the git version itself, after it has
+      # masked the credential and in the environment it builds for git.
       env:
         CA_REQUIRE_MODEL_ATTRIBUTION: ${{ inputs.require-model-attribution }}
         CA_HIDDEN_UNICODE: ${{ inputs.hidden-unicode }}
@@ -31,18 +33,9 @@ runs:
           echo "::error title=agent-guardrails::python3 is not on PATH. This action needs Python 3.10 or newer."
           exit 1
         fi
-        if ! command -v git >/dev/null 2>&1; then
-          echo "::error title=agent-guardrails::git is not on PATH. This action needs git 2.31 or newer."
-          exit 1
-        fi
         python3 --version
-        git --version
         if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
           echo "::error title=agent-guardrails::This action needs Python 3.10 or newer."
-          exit 1
-        fi
-        if ! python3 -I -c 'import re, sys; m = re.match(r"git version (\d+)\.(\d+)", sys.argv[1]); sys.exit(not m or (int(m[1]), int(m[2])) < (2, 31))' "$(git --version)"; then
-          echo "::error title=agent-guardrails::This action needs git 2.31 or newer."
           exit 1
         fi
         python3 -I "$GITHUB_ACTION_PATH/run.py"

@@ -1,13 +1,16 @@
 """Write findings as workflow commands and plain log lines.
 
-Text from the pull request reaches the log only through annotate() and log().
-Both render it with visible() first, so a newline, an escape sequence, or an
-invisible character shows as <U+XXXX> and cannot start a workflow command of
-its own.
+Text from the pull request reaches the log only through annotate() and log(),
+and both render it with _render() first. A newline, an escape sequence, or an
+invisible character shows as <U+XXXX>, so the text cannot start a line of its
+own, and the fixed prefix keeps a plain line from starting with "::". The
+runner's legacy parser also accepts "##[" anywhere in a line, not only at its
+start, so _render() shows the first "#" of every "##[" as <U+0023>.
 """
 
 from __future__ import annotations
 
+import re
 from typing import TextIO
 
 from .hidden import visible
@@ -15,6 +18,13 @@ from .rules import Finding
 
 _SEVERITIES = ("error", "warning")
 _PREFIX = "agent-guardrails: "
+# Each "#" that begins a "##[". What is left, "#[", starts no command.
+_LEGACY_COMMAND = re.compile(r"#(?=#\[)")
+
+
+def _render(text: str) -> str:
+    """The one way outside text reaches the log."""
+    return _LEGACY_COMMAND.sub("<U+0023>", visible(text))
 
 
 def _data(text: str) -> str:
@@ -39,7 +49,7 @@ class Reporter:
 
     def log(self, text: str) -> None:
         # The fixed prefix keeps the line from ever starting with "::".
-        self._write(_PREFIX + visible(text))
+        self._write(_PREFIX + _render(text))
 
     def annotate(
         self,
@@ -56,11 +66,11 @@ class Reporter:
             raise ValueError(f"unknown severity {severity!r}")
         properties = []
         if file is not None:
-            properties.append(f"file={_property(visible(file))}")
+            properties.append(f"file={_property(_render(file))}")
             if line is not None:
                 properties.append(f"line={int(line)}")
-        properties.append(f"title={_property(visible(title))}")
-        self._write(f"::{severity} {','.join(properties)}::{_data(visible(message))}")
+        properties.append(f"title={_property(_render(title))}")
+        self._write(f"::{severity} {','.join(properties)}::{_data(_render(message))}")
         self.log(f"{severity}: {title}: {message}")
 
     def finding(self, finding: Finding) -> None:

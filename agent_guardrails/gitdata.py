@@ -22,6 +22,10 @@ from .event import Settings
 _SHA = re.compile(r"[0-9a-f]{40}")
 _LOG_FORMAT = "%H%x00%ae%x00%ce%x00%B"
 _LOG_FIELDS = 4
+_VERSION = re.compile(r"git version (\d+)\.(\d+)")
+_MINIMUM_VERSION = (2, 31)
+_NO_GIT = "git is not on PATH. This action needs git 2.31 or newer."
+_OLD_GIT = "This action needs git 2.31 or newer."
 
 
 class GitError(Exception):
@@ -95,6 +99,8 @@ class _Repository:
                 stderr=subprocess.PIPE,
                 check=False,
             )
+        except FileNotFoundError:
+            raise GitError(_NO_GIT) from None
         except OSError as error:
             raise GitError(
                 f"git {args[0]} could not start: {type(error).__name__}"
@@ -117,11 +123,23 @@ def fetch_pull_request(
     between them. Every doubt about the range raises GitError."""
     root = tempfile.mkdtemp(prefix="agent-guardrails-", dir=settings.runner_temp)
     try:
-        return _read(_Repository(root, settings, credential), settings)
+        repo = _Repository(root, settings, credential)
+        _require_git(repo, log)
+        return _read(repo, settings)
     finally:
         shutil.rmtree(root, ignore_errors=True)
         if os.path.exists(root):
             log(f"could not remove the temporary repository {root}")
+
+
+def _require_git(repo: _Repository, log: Callable[[str], None]) -> None:
+    """The version check is a git call like any other: after the mask, and in
+    the environment built from scratch, never the runner's."""
+    version = repo.git("--version").decode("utf-8", "replace").strip()
+    log(version)
+    match = _VERSION.match(version)
+    if not match or (int(match[1]), int(match[2])) < _MINIMUM_VERSION:
+        raise GitError(_OLD_GIT)
 
 
 def _read(repo: _Repository, settings: Settings) -> PullRequest:

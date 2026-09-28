@@ -5,6 +5,8 @@ import unittest
 
 from agent_guardrails.report import Reporter
 
+from .support import foreign_commands
+
 _SPOOF = "a%b\n::error::spoof"
 
 
@@ -37,6 +39,19 @@ class ReportTests(unittest.TestCase):
         stream = io.StringIO()
         Reporter(stream).log("::warning::x\r\n")
         self.assertEqual(stream.getvalue(), "agent-guardrails: ::warning::x<U+000D><U+000A>\n")
+
+    def test_legacy_command_opener_is_shown_not_run(self) -> None:
+        stream = io.StringIO()
+        reporter = Reporter(stream)
+        reporter.annotate(
+            "warning", "##[warning]t", "m ###[error]m", file="a##[debug]b.md", line=2
+        )
+        reporter.log("##[set-output name=x]y")
+        output = stream.getvalue()
+        self.assertEqual(foreign_commands(output), [])
+        self.assertEqual(len(output.splitlines()), 3)
+        self.assertIn("title=<U+0023>#[warning]t::m #<U+0023>#[error]m", output)
+        self.assertIn("agent-guardrails: <U+0023>#[set-output name=x]y\n", output)
 
 
 if __name__ == "__main__":

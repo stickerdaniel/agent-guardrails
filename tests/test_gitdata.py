@@ -12,22 +12,11 @@ from unittest import mock
 from agent_guardrails import gitdata
 from agent_guardrails.main import main
 
-from .support import TOKEN, RemoteTestCase
+from .support import TOKEN, RemoteTestCase, foreign_commands, git_environment
 
 _CREDENTIAL = gitdata.encode_credential(TOKEN)
 _HEADER_KEY = "http.https://github.com/.extraheader"
 _HEADER = f"AUTHORIZATION: basic {_CREDENTIAL}"
-_ISOLATED_KEYS = {
-    "PATH",
-    "HOME",
-    "XDG_CONFIG_HOME",
-    "LANG",
-    "GIT_CONFIG_NOSYSTEM",
-    "GIT_ATTR_NOSYSTEM",
-    "GIT_TERMINAL_PROMPT",
-    "GIT_DIR",
-    "GIT_CONFIG_COUNT",
-}
 
 
 class _Recorder(io.StringIO):
@@ -56,10 +45,12 @@ class CredentialTests(RemoteTestCase):
 
     def _fake_git(self, argv, *, env, **kwargs):
         self.timeline.append(("git", list(argv), dict(env)))
+        if argv[1] == "--version":
+            return subprocess.CompletedProcess(argv, 0, b"git version 2.31.0\n", b"")
         if argv[1] == "fetch":
             stderr = (
                 f"fatal: unable to access 'https://x-access-token:{TOKEN}@github.com/'\n"
-                f"sent {_HEADER}\n\x1b[2K::error::spoofed"
+                f"sent {_HEADER}\n\x1b[2K::error::spoofed ##[warning]spoofed"
             ).encode()
             return subprocess.CompletedProcess(argv, 128, b"", stderr)
         if argv[1] == "check-ref-format":
@@ -108,6 +99,8 @@ class CredentialTests(RemoteTestCase):
         _, stdout, _ = self._run()
         self.assertIn("<U+001B>", stdout)
         self.assertNotIn("\x1b", stdout)
+        self.assertEqual(foreign_commands(stdout), [])
+        self.assertIn("<U+0023>#[warning]spoofed", stdout)
         for line in stdout.splitlines():
             self.assertRegex(line, r"^(::add-mask::|::error title=|agent-guardrails: )")
 
@@ -134,10 +127,7 @@ class CredentialTests(RemoteTestCase):
             self._run()
         runner_temp = str(self.remote.runner_temp)
         for _, argv, env in self._calls():
-            count = int(env["GIT_CONFIG_COUNT"])
-            expected = _ISOLATED_KEYS | {
-                f"GIT_CONFIG_{kind}_{index}" for kind in ("KEY", "VALUE") for index in range(count)
-            }
+            expected = git_environment(int(env["GIT_CONFIG_COUNT"]))
             with self.subTest(command=argv[1]):
                 self.assertEqual(set(env), expected)
                 self.assertTrue(env["GIT_DIR"].startswith(runner_temp))
