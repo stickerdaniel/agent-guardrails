@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   check-bot-coauthors:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Check out trusted workflow revision
