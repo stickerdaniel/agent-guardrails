@@ -21,7 +21,7 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/agent-guardrails@<sha> # v1.0.0
+      - uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
         with:
           require-model-attribution: false
 ```
