@@ -47,7 +47,7 @@ The workflow and the pinned action come from the base repository's default branc
 
 ## Requirements
 
-The runner needs Python 3.10 or newer and git 2.31 or newer on `PATH`. GitHub-hosted Ubuntu runners have both.
+Use a Linux or macOS runner with Python 3.10 or newer and git 2.31 or newer on `PATH`. GitHub-hosted Ubuntu runners have both. Windows runners are not supported.
 
 ## License
 
