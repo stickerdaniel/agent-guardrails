@@ -98,3 +98,43 @@ la mise à jour préserve les données. où se trouve la dernière révision. la
 Noël approche à grands pas.
 - une fenêtre légère et élégante; configuration lives next to the code.
 ## le garçon reçoit un reçu détaillé
+- où se trouve la dernière révision; keep the example short and exact.
+- la société a déjà réécrit le système; the cache is rebuilt on every change.
+Les résultats sont vérifiés à chaque étape.
+## Les résultats sont vérifiés à chaque étape
+où se trouve la dernière révision. Les résultats sont vérifiés à chaque étape. la société a déjà réécrit le système.
+
+## le garçon reçoit un reçu détaillé
+## la société a déjà réécrit le système
+le garçon reçoit un reçu détaillé. chaque modèle est décrit en détail. Noël approche à grands pas.
+- la mise à jour préserve les données; configuration lives next to the code.
+la mise à jour préserve les données. la mise à jour préserve les données.
+- où se trouve la dernière révision; keep the example short and exact.
+la mise à jour préserve les données. où se trouve la dernière révision.
+le garçon reçoit un reçu détaillé. Les résultats sont vérifiés à chaque étape.
+- la mise à jour préserve les données; the parser reads one line at a time.
+Noël approche à grands pas.
+- Les résultats sont vérifiés à chaque étape; the review found nothing to change.
+## Les résultats sont vérifiés à chaque étape
+
+une fenêtre légère et élégante. chaque modèle est décrit en détail. Noël approche à grands pas.
+la société a déjà réécrit le système. une fenêtre légère et élégante.
+## une fenêtre légère et élégante
+
+
+la société a déjà réécrit le système.
+
+chaque modèle est décrit en détail. le garçon reçoit un reçu détaillé.
+## Les résultats sont vérifiés à chaque étape
+Les résultats sont vérifiés à chaque étape.
+- Noël approche à grands pas; errors are reported with their line numbers.
+## Noël approche à grands pas
+Noël approche à grands pas. chaque modèle est décrit en détail.
+la société a déjà réécrit le système. la société a déjà réécrit le système.
+le garçon reçoit un reçu détaillé.
+- une fenêtre légère et élégante; this section describes the release process.
+le garçon reçoit un reçu détaillé.
+Les résultats sont vérifiés à chaque étape. la mise à jour préserve les données.
+## où se trouve la dernière révision
+- chaque modèle est décrit en détail; the cache is rebuilt on every change.
+où se trouve la dernière révision.
