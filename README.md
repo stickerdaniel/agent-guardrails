@@ -49,6 +49,10 @@ The workflow and the pinned action come from the base repository's default branc
 
 Use a Linux or macOS runner with Python 3.10 or newer and git 2.31 or newer on `PATH`. GitHub-hosted Ubuntu runners have both. Windows runners are not supported.
 
+## CI cost study (temporary)
+
+`.github/workflows/e2e-benchmark.yml` and `e2e/` belong to a temporary study of the recurring job time of three packagings of this action: the published Python action, a Rust snapshot, and a Node 24 snapshot with a native Git supervisor. The controller runs only when a maintainer labels one of four fixture pull requests whose base is `e2e/workload-base`. It has a read-only token and checks out nothing. Neither is part of the action, and a reviewed pull request removes both when the study ends.
+
 ## License
 
 MIT. `agent_guardrails/hidden.py` comes from [no-ai-marks](https://github.com/mishan/no-ai-marks); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

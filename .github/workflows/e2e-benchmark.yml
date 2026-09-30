@@ -1,0 +1,1193 @@
+name: E2E benchmark
+
+# Temporary. The controller of the E2E-3 CI cost study, removed by a reviewed
+# pull request when the study closes. It compares the recurring job time of
+# three packagings of this action: the published Python action (PY), the Rust
+# snapshot (RS) and the Node 24 snapshot with a native Git supervisor (TS-H).
+#
+# A maintainer adds one order label to one of the four frozen fixture pull
+# requests, whose base is e2e/workload-base. That starts one round: the three
+# variants of the label's order run one after another on x64 and, at the same
+# time, on arm64. Removing and adding the label again starts the next round.
+# Every job reads its own event into a digest and then runs exactly one
+# pinned variant. Nothing from the pull request is checked out or run, and
+# the job token can only read.
+#
+# The status condition keeps a variant's intended failure (W4) from skipping
+# the variants after it, while cancelling the run stops them. A job whose
+# label is not the event's is skipped whole and downloads nothing.
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  x64-a1:
+    name: x64 A1 PY
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-a2:
+    name: x64 A2 TS-H
+    needs: x64-a1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-a3:
+    name: x64 A3 RS
+    needs: x64-a2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-b1:
+    name: x64 B1 TS-H
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-b2:
+    name: x64 B2 RS
+    needs: x64-b1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-b3:
+    name: x64 B3 PY
+    needs: x64-b2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-c1:
+    name: x64 C1 RS
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-c2:
+    name: x64 C2 PY
+    needs: x64-c1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  x64-c3:
+    name: x64 C3 TS-H
+    needs: x64-c2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-a1:
+    name: arm64 A1 PY
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-a2:
+    name: arm64 A2 TS-H
+    needs: arm64-a1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-a3:
+    name: arm64 A3 RS
+    needs: arm64-a2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-A' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-b1:
+    name: arm64 B1 TS-H
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-b2:
+    name: arm64 B2 RS
+    needs: arm64-b1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-b3:
+    name: arm64 B3 PY
+    needs: arm64-b2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-B' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-c1:
+    name: arm64 C1 RS
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant RS
+        uses: stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806 # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-c2:
+    name: arm64 C2 PY
+    needs: arm64-c1
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant PY
+        uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+        with:
+          require-model-attribution: true
+          hidden-unicode: error
+
+  arm64-c3:
+    name: arm64 C3 TS-H
+    needs: arm64-c2
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'e2e:order-C' && github.event.pull_request.base.ref == 'e2e/workload-base' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.pull_request.head.ref == 'e2e/workload-w1' || github.event.pull_request.head.ref == 'e2e/workload-w2' || github.event.pull_request.head.ref == 'e2e/workload-w3' || github.event.pull_request.head.ref == 'e2e/workload-w4') }}
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: E2E trusted event metadata
+        shell: bash
+        env:
+          E2E_REQUIRE_MODEL_ATTRIBUTION: "true"
+          E2E_HIDDEN_UNICODE: error
+        run: |
+          # e2e-metadata v1: a digest of this job's own event; no PR text is printed
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          event=$GITHUB_EVENT_PATH
+          fail() { echo "e2e-metadata: this is not a labeled event of a fixture pull request" >&2; exit 1; }
+          jq -e '(.action | type) == "string" and (.label.name | type) == "string"
+            and (.pull_request.number | type) == "number"
+            and (.pull_request.head.sha | type) == "string" and (.pull_request.base.sha | type) == "string"
+            and (.pull_request.base.ref | type) == "string" and (.pull_request.title | type) == "string"
+            and ((.pull_request.body | type) == "string" or (.pull_request.body | type) == "null")
+            and (.pull_request.user.login | type) == "string"' "$event" >/dev/null 2>&1 || fail
+          field() { jq -r "$1" "$event" 2>/dev/null; }
+          action=$(field .action) || fail
+          label=$(field .label.name) || fail
+          number=$(field .pull_request.number) || fail
+          base_ref=$(field .pull_request.base.ref) || fail
+          base_sha=$(field .pull_request.base.sha) || fail
+          head_sha=$(field .pull_request.head.sha) || fail
+          [[ $action == labeled && $label =~ ^e2e:order-[ABC]$ && $number =~ ^[1-9][0-9]*$ ]] || fail
+          [[ $base_ref == e2e/workload-base && $base_sha =~ ^[0-9a-f]{40}$ && $head_sha =~ ^[0-9a-f]{40}$ ]] || fail
+          projection='{v: 1, number: .pull_request.number, head_sha: .pull_request.head.sha,
+            base_sha: .pull_request.base.sha, base_ref: .pull_request.base.ref,
+            title: .pull_request.title, body: .pull_request.body, author: .pull_request.user.login}'
+          digest=$(jq -cS "$projection" "$event" 2>/dev/null | sha256sum) || fail
+          digest=${digest%% *}
+          [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail
+          jq_version=$(jq --version)
+          sha256sum_version=$(sha256sum --version)
+          emit() { printf 'e2e-meta v1 %s=%s\n' "$1" "$2"; }
+          emit digest "$digest"
+          emit event "$GITHUB_EVENT_NAME"
+          emit action "$action"
+          emit label "$label"
+          emit number "$number"
+          emit base_ref "$base_ref"
+          emit base_sha "$base_sha"
+          emit head_sha "$head_sha"
+          emit repository "$GITHUB_REPOSITORY"
+          emit server_url "$GITHUB_SERVER_URL"
+          emit require_model_attribution "$E2E_REQUIRE_MODEL_ATTRIBUTION"
+          emit hidden_unicode "$E2E_HIDDEN_UNICODE"
+          emit workflow_sha "$GITHUB_WORKFLOW_SHA"
+          emit workflow_ref "$GITHUB_WORKFLOW_REF"
+          emit run_id "$GITHUB_RUN_ID"
+          emit run_attempt "$GITHUB_RUN_ATTEMPT"
+          emit jq "$jq_version"
+          emit sha256sum "${sha256sum_version%%$'\n'*}"
+      - name: Variant TS-H
+        uses: stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f # e2e snapshot, unmerged
+        with:
+          require-model-attribution: true
+          hidden-unicode: error

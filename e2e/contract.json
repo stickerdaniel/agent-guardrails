@@ -1,0 +1,634 @@
+{
+  "contract": "E2E-3 frozen analysis contract",
+  "version": 1,
+  "state": "template. Main fills every null once the four fixture pull requests exist and the controller is merged, checks each expected_event_digest with analyze.py digest against the shakedown's metadata step, and hashes this file after the shakedown. It changes afterwards only for a recorded protocol defect, never after a measured round.",
+  "repository": "stickerdaniel/agent-guardrails",
+  "server_url": "https://github.com",
+  "controller": {
+    "workflow_path": ".github/workflows/e2e-benchmark.yml",
+    "workflow_ref": "stickerdaniel/agent-guardrails/.github/workflows/e2e-benchmark.yml@refs/heads/main",
+    "workflow_sha": null,
+    "event": "pull_request_target",
+    "action": "labeled",
+    "metadata_step": "E2E trusted event metadata"
+  },
+  "variants": {
+    "PY": {
+      "sha": "a3508d7320e64370b878359b1f4ae541b507224f",
+      "ref_comment": "v1.0.0",
+      "step": "Variant PY",
+      "packaging": "the published Python composite action, v1.0.0"
+    },
+    "RS": {
+      "sha": "a7e46651837895aa10006c79a58a6a502b968806",
+      "branch": "e2e/rust-snapshot",
+      "ref_comment": "e2e snapshot, unmerged",
+      "step": "Variant RS",
+      "packaging": "Rust composite action with four native platform artifacts"
+    },
+    "TS-H": {
+      "sha": "82427d58bc35a2146e3ce6209bbff8be7e2c6f3f",
+      "branch": "e2e/ts-snapshot",
+      "ref_comment": "e2e snapshot, unmerged",
+      "step": "Variant TS-H",
+      "packaging": "Node 24 action with a native Git supervisor, not a pure TypeScript action"
+    }
+  },
+  "inputs": {
+    "require-model-attribution": "true",
+    "hidden-unicode": "error"
+  },
+  "architectures": {
+    "x64": "ubuntu-latest",
+    "arm64": "ubuntu-24.04-arm"
+  },
+  "orders": {
+    "A": {
+      "label": "e2e:order-A",
+      "variants": [
+        "PY",
+        "TS-H",
+        "RS"
+      ]
+    },
+    "B": {
+      "label": "e2e:order-B",
+      "variants": [
+        "TS-H",
+        "RS",
+        "PY"
+      ]
+    },
+    "C": {
+      "label": "e2e:order-C",
+      "variants": [
+        "RS",
+        "PY",
+        "TS-H"
+      ]
+    }
+  },
+  "jobs": {
+    "x64 A1 PY": {
+      "key": "x64-a1",
+      "arch": "x64",
+      "order": "A",
+      "position": 1,
+      "variant": "PY"
+    },
+    "x64 A2 TS-H": {
+      "key": "x64-a2",
+      "arch": "x64",
+      "order": "A",
+      "position": 2,
+      "variant": "TS-H"
+    },
+    "x64 A3 RS": {
+      "key": "x64-a3",
+      "arch": "x64",
+      "order": "A",
+      "position": 3,
+      "variant": "RS"
+    },
+    "x64 B1 TS-H": {
+      "key": "x64-b1",
+      "arch": "x64",
+      "order": "B",
+      "position": 1,
+      "variant": "TS-H"
+    },
+    "x64 B2 RS": {
+      "key": "x64-b2",
+      "arch": "x64",
+      "order": "B",
+      "position": 2,
+      "variant": "RS"
+    },
+    "x64 B3 PY": {
+      "key": "x64-b3",
+      "arch": "x64",
+      "order": "B",
+      "position": 3,
+      "variant": "PY"
+    },
+    "x64 C1 RS": {
+      "key": "x64-c1",
+      "arch": "x64",
+      "order": "C",
+      "position": 1,
+      "variant": "RS"
+    },
+    "x64 C2 PY": {
+      "key": "x64-c2",
+      "arch": "x64",
+      "order": "C",
+      "position": 2,
+      "variant": "PY"
+    },
+    "x64 C3 TS-H": {
+      "key": "x64-c3",
+      "arch": "x64",
+      "order": "C",
+      "position": 3,
+      "variant": "TS-H"
+    },
+    "arm64 A1 PY": {
+      "key": "arm64-a1",
+      "arch": "arm64",
+      "order": "A",
+      "position": 1,
+      "variant": "PY"
+    },
+    "arm64 A2 TS-H": {
+      "key": "arm64-a2",
+      "arch": "arm64",
+      "order": "A",
+      "position": 2,
+      "variant": "TS-H"
+    },
+    "arm64 A3 RS": {
+      "key": "arm64-a3",
+      "arch": "arm64",
+      "order": "A",
+      "position": 3,
+      "variant": "RS"
+    },
+    "arm64 B1 TS-H": {
+      "key": "arm64-b1",
+      "arch": "arm64",
+      "order": "B",
+      "position": 1,
+      "variant": "TS-H"
+    },
+    "arm64 B2 RS": {
+      "key": "arm64-b2",
+      "arch": "arm64",
+      "order": "B",
+      "position": 2,
+      "variant": "RS"
+    },
+    "arm64 B3 PY": {
+      "key": "arm64-b3",
+      "arch": "arm64",
+      "order": "B",
+      "position": 3,
+      "variant": "PY"
+    },
+    "arm64 C1 RS": {
+      "key": "arm64-c1",
+      "arch": "arm64",
+      "order": "C",
+      "position": 1,
+      "variant": "RS"
+    },
+    "arm64 C2 PY": {
+      "key": "arm64-c2",
+      "arch": "arm64",
+      "order": "C",
+      "position": 2,
+      "variant": "PY"
+    },
+    "arm64 C3 TS-H": {
+      "key": "arm64-c3",
+      "arch": "arm64",
+      "order": "C",
+      "position": 3,
+      "variant": "TS-H"
+    }
+  },
+  "fixtures": {
+    "workload_manifest": {
+      "file": "manifest.json",
+      "sha256": "fe96eff609d83e5642a23bbbe559ce4b43e7cc9652d1a34dbf01c92c30591f83",
+      "bytes": 41981,
+      "lock": "e2e/workloads.lock.json",
+      "generator": "python3 e2e/gen_workloads.py OUT_DIR"
+    },
+    "base": {
+      "branch": "e2e/workload-base",
+      "sha": "a9f2dcbdcbcac63aba0dde87f620ce50507edf9d",
+      "parent": "3937a2dc711ea26a856b2b75536cd01c80ac86b7"
+    },
+    "workloads": {
+      "W3": {
+        "name": "idle",
+        "head_branch": "e2e/workload-w3",
+        "head_sha": "654545ce362eb72e76af98099b1e59b5b763a037",
+        "pr_number": null,
+        "author": null,
+        "expected_event_digest": null,
+        "expected_conclusion": "success",
+        "expected_exit_code": 0
+      },
+      "W1": {
+        "name": "medium controlled",
+        "head_branch": "e2e/workload-w1",
+        "head_sha": "fbc6f5658f7b28287d71ccfad5477edba1c4cc75",
+        "pr_number": null,
+        "author": null,
+        "expected_event_digest": null,
+        "expected_conclusion": "success",
+        "expected_exit_code": 0
+      },
+      "W2": {
+        "name": "heavy controlled",
+        "head_branch": "e2e/workload-w2",
+        "head_sha": "1f75a6cfd1fe77e5a1045661fc09f83d9b953d67",
+        "pr_number": null,
+        "author": null,
+        "expected_event_digest": null,
+        "expected_conclusion": "success",
+        "expected_exit_code": 0
+      },
+      "W4": {
+        "name": "failing",
+        "head_branch": "e2e/workload-w4",
+        "head_sha": "40952d1485f3bf8eaa270891dfa11b8849803923",
+        "pr_number": null,
+        "author": null,
+        "expected_event_digest": null,
+        "expected_conclusion": "failure",
+        "expected_exit_code": 1
+      }
+    }
+  },
+  "runtime": {
+    "note": "Filled from the shakedown: the PY python3 --version line, the git version line and the RS and TS-H identity lines, the TS-H one with its node version written as 'node <node>'. Any measured job that differs is drift and closes the attempt.",
+    "python": {
+      "x64": null,
+      "arm64": null
+    },
+    "git": {
+      "x64": null,
+      "arm64": null
+    },
+    "identity": {
+      "RS": {
+        "x64": null,
+        "arm64": null
+      },
+      "TS-H": {
+        "x64": null,
+        "arm64": null
+      }
+    }
+  },
+  "schedule": {
+    "seed": 20260929,
+    "rotation": "int(SHA256(ASCII 'E2E3-v1|20260929|<workload>'), big endian) mod 3, an offset into A, B, C",
+    "rotations": {
+      "W3": 1,
+      "W1": 0,
+      "W2": 2,
+      "W4": 1
+    },
+    "cycle": [
+      "W3",
+      "W1",
+      "W2",
+      "W4"
+    ],
+    "rounds_per_workload": 12,
+    "dispatch": "one labeled event per round, one round at a time, cycles W3, W1, W2, W4; record the actual order",
+    "sequence": [
+      {
+        "dispatch": 1,
+        "round": 1,
+        "workload": "W3",
+        "order": "B"
+      },
+      {
+        "dispatch": 2,
+        "round": 1,
+        "workload": "W1",
+        "order": "A"
+      },
+      {
+        "dispatch": 3,
+        "round": 1,
+        "workload": "W2",
+        "order": "C"
+      },
+      {
+        "dispatch": 4,
+        "round": 1,
+        "workload": "W4",
+        "order": "B"
+      },
+      {
+        "dispatch": 5,
+        "round": 2,
+        "workload": "W3",
+        "order": "C"
+      },
+      {
+        "dispatch": 6,
+        "round": 2,
+        "workload": "W1",
+        "order": "B"
+      },
+      {
+        "dispatch": 7,
+        "round": 2,
+        "workload": "W2",
+        "order": "A"
+      },
+      {
+        "dispatch": 8,
+        "round": 2,
+        "workload": "W4",
+        "order": "C"
+      },
+      {
+        "dispatch": 9,
+        "round": 3,
+        "workload": "W3",
+        "order": "A"
+      },
+      {
+        "dispatch": 10,
+        "round": 3,
+        "workload": "W1",
+        "order": "C"
+      },
+      {
+        "dispatch": 11,
+        "round": 3,
+        "workload": "W2",
+        "order": "B"
+      },
+      {
+        "dispatch": 12,
+        "round": 3,
+        "workload": "W4",
+        "order": "A"
+      },
+      {
+        "dispatch": 13,
+        "round": 4,
+        "workload": "W3",
+        "order": "B"
+      },
+      {
+        "dispatch": 14,
+        "round": 4,
+        "workload": "W1",
+        "order": "A"
+      },
+      {
+        "dispatch": 15,
+        "round": 4,
+        "workload": "W2",
+        "order": "C"
+      },
+      {
+        "dispatch": 16,
+        "round": 4,
+        "workload": "W4",
+        "order": "B"
+      },
+      {
+        "dispatch": 17,
+        "round": 5,
+        "workload": "W3",
+        "order": "C"
+      },
+      {
+        "dispatch": 18,
+        "round": 5,
+        "workload": "W1",
+        "order": "B"
+      },
+      {
+        "dispatch": 19,
+        "round": 5,
+        "workload": "W2",
+        "order": "A"
+      },
+      {
+        "dispatch": 20,
+        "round": 5,
+        "workload": "W4",
+        "order": "C"
+      },
+      {
+        "dispatch": 21,
+        "round": 6,
+        "workload": "W3",
+        "order": "A"
+      },
+      {
+        "dispatch": 22,
+        "round": 6,
+        "workload": "W1",
+        "order": "C"
+      },
+      {
+        "dispatch": 23,
+        "round": 6,
+        "workload": "W2",
+        "order": "B"
+      },
+      {
+        "dispatch": 24,
+        "round": 6,
+        "workload": "W4",
+        "order": "A"
+      },
+      {
+        "dispatch": 25,
+        "round": 7,
+        "workload": "W3",
+        "order": "B"
+      },
+      {
+        "dispatch": 26,
+        "round": 7,
+        "workload": "W1",
+        "order": "A"
+      },
+      {
+        "dispatch": 27,
+        "round": 7,
+        "workload": "W2",
+        "order": "C"
+      },
+      {
+        "dispatch": 28,
+        "round": 7,
+        "workload": "W4",
+        "order": "B"
+      },
+      {
+        "dispatch": 29,
+        "round": 8,
+        "workload": "W3",
+        "order": "C"
+      },
+      {
+        "dispatch": 30,
+        "round": 8,
+        "workload": "W1",
+        "order": "B"
+      },
+      {
+        "dispatch": 31,
+        "round": 8,
+        "workload": "W2",
+        "order": "A"
+      },
+      {
+        "dispatch": 32,
+        "round": 8,
+        "workload": "W4",
+        "order": "C"
+      },
+      {
+        "dispatch": 33,
+        "round": 9,
+        "workload": "W3",
+        "order": "A"
+      },
+      {
+        "dispatch": 34,
+        "round": 9,
+        "workload": "W1",
+        "order": "C"
+      },
+      {
+        "dispatch": 35,
+        "round": 9,
+        "workload": "W2",
+        "order": "B"
+      },
+      {
+        "dispatch": 36,
+        "round": 9,
+        "workload": "W4",
+        "order": "A"
+      },
+      {
+        "dispatch": 37,
+        "round": 10,
+        "workload": "W3",
+        "order": "B"
+      },
+      {
+        "dispatch": 38,
+        "round": 10,
+        "workload": "W1",
+        "order": "A"
+      },
+      {
+        "dispatch": 39,
+        "round": 10,
+        "workload": "W2",
+        "order": "C"
+      },
+      {
+        "dispatch": 40,
+        "round": 10,
+        "workload": "W4",
+        "order": "B"
+      },
+      {
+        "dispatch": 41,
+        "round": 11,
+        "workload": "W3",
+        "order": "C"
+      },
+      {
+        "dispatch": 42,
+        "round": 11,
+        "workload": "W1",
+        "order": "B"
+      },
+      {
+        "dispatch": 43,
+        "round": 11,
+        "workload": "W2",
+        "order": "A"
+      },
+      {
+        "dispatch": 44,
+        "round": 11,
+        "workload": "W4",
+        "order": "C"
+      },
+      {
+        "dispatch": 45,
+        "round": 12,
+        "workload": "W3",
+        "order": "A"
+      },
+      {
+        "dispatch": 46,
+        "round": 12,
+        "workload": "W1",
+        "order": "C"
+      },
+      {
+        "dispatch": 47,
+        "round": 12,
+        "workload": "W2",
+        "order": "B"
+      },
+      {
+        "dispatch": 48,
+        "round": 12,
+        "workload": "W4",
+        "order": "A"
+      }
+    ]
+  },
+  "estimators": {
+    "primary": "Jobs API completed_at - started_at of attempt 1, whole seconds",
+    "pairs": [
+      "TS-H - PY",
+      "RS - PY"
+    ],
+    "rounds_per_workload": 12,
+    "bootstrap_draws": 20000,
+    "bootstrap_key": "E2E3-bootstrap-v1|20260929|<workload>|<replicate 1..20000>|<draw 1..12>",
+    "bootstrap_rejection": "a digest, read as a big-endian integer, at or above floor(2^256/12)*12 is rejected and '<key>|<counter>' hashed instead, counter 1, 2, ...; the accepted value mod 12 is the round index",
+    "bootstrap_unit": "whole rounds: the six jobs of one dispatch, both architectures, resampled together",
+    "bootstrap_ranks": [
+      500,
+      19500
+    ],
+    "median_order_statistics": [
+      3,
+      10
+    ],
+    "median_coverage": 0.96142578125,
+    "job_precision_seconds": 1,
+    "difference_precision_seconds": 2,
+    "private_billing": "CEIL(duration / 60) per job before pairing, over the job's precision interval, at least one minute for a job that ran; AMBIGUOUS where the interval crosses a 60-second boundary, never a saving",
+    "public_hosted_billed_difference": 0,
+    "log_spans": {
+      "T_span": "first to last timestamped line of the job log",
+      "T_download": "'Getting action download info' to 'Complete job name'",
+      "T_metadata": "the metadata step's group line to the variant step's group line",
+      "T_action": "the variant step's group line to 'Post job cleanup.' or 'Cleaning up orphan processes'",
+      "T_post": "that line to the last line",
+      "missing_boundary": "unavailable, never zero"
+    },
+    "max_replacements": 3
+  },
+  "failure_accounting": [
+    "Only attempt 1 counts. Rerun attempts are recorded and excluded, and never replace a round.",
+    "A round counts only when all six of its jobs are valid and the twelve other jobs were skipped.",
+    "W4's exit 1 is its expected result; a W4 success is a candidate defect.",
+    "A candidate defect, a protocol deviation, runtime or table drift, or an operator cancel after the first measured dispatch closes the attempt incomplete. A successor needs a new, separately approved preregistration.",
+    "An infrastructure failure, attested by the provider before the candidate started, discards the whole round for all variants. One replacement of the same workload and order is appended; at most three in total.",
+    "An ambiguous cause pauses the series for review, which then closes the attempt rather than relabel it.",
+    "base_tip_before and base_tip_after of every dispatch must equal the frozen base."
+  ],
+  "exclusions": [
+    "The 72 shakedown jobs: protocol validation only, never timing.",
+    "Skipped jobs, which are not samples.",
+    "The timing endpoint's run_duration_ms and billable duration_ms, which are not job time.",
+    "Log spans as billable duration.",
+    "Pooling across workloads or image versions, and any overall winner."
+  ]
+}

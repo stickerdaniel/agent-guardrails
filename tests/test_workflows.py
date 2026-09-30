@@ -21,6 +21,14 @@ from .support import ROOT, TOKEN, RemoteTestCase, git_environment
 _WORKFLOWS = ROOT / ".github" / "workflows"
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 _VERSION_COMMENT = re.compile(r" # v[0-9]+\.[0-9]+\.[0-9]+$")
+# The one exception to a version comment: the CI cost study's controller runs
+# two unreleased snapshots, which have no version to name.
+_STUDY = "e2e-benchmark.yml"
+_STUDY_SNAPSHOTS = {
+    "stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806",
+    "stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f",
+}
+_SNAPSHOT_COMMENT = " # e2e snapshot, unmerged"
 
 
 def _load(path) -> dict:
@@ -256,8 +264,209 @@ class CentralChecksTests(unittest.TestCase):
             for step in steps:
                 with self.subTest(workflow=path.name, uses=step["uses"]):
                     self.assertRegex(step["uses"], _PINNED.pattern + "$")
-                    line = next(line for line in text if f"uses: {step['uses']}" in line)
-                    self.assertRegex(line, _VERSION_COMMENT)
+                    for line in (line for line in text if f"uses: {step['uses']}" in line):
+                        if path.name == _STUDY and step["uses"] in _STUDY_SNAPSHOTS:
+                            self.assertTrue(line.endswith(f"uses: {step['uses']}{_SNAPSHOT_COMMENT}"), line)
+                        else:
+                            self.assertRegex(line, _VERSION_COMMENT)
+
+
+class StudyControllerTests(unittest.TestCase):
+    """The CI cost study's controller: 18 fixed jobs, each reading its own
+    event into a digest and then running exactly one pinned variant."""
+
+    ORDERS = {"A": ("PY", "TS-H", "RS"), "B": ("TS-H", "RS", "PY"), "C": ("RS", "PY", "TS-H")}
+    ARCHES = {"x64": "ubuntu-latest", "arm64": "ubuntu-24.04-arm"}
+    REFS = {
+        "PY": "stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f",
+        "RS": "stickerdaniel/agent-guardrails@a7e46651837895aa10006c79a58a6a502b968806",
+        "TS-H": "stickerdaniel/agent-guardrails@82427d58bc35a2146e3ce6209bbff8be7e2c6f3f",
+    }
+    COMMENTS = {"PY": " # v1.0.0", "RS": _SNAPSHOT_COMMENT, "TS-H": _SNAPSHOT_COMMENT}
+    HEADS = ("e2e/workload-w1", "e2e/workload-w2", "e2e/workload-w3", "e2e/workload-w4")
+
+    def setUp(self) -> None:
+        self.path = _WORKFLOWS / _STUDY
+        self.workflow = _load(self.path)
+        self.contract = json.loads((ROOT / "e2e" / "contract.json").read_text(encoding="utf-8"))
+
+    def condition(self, order: str) -> str:
+        heads = " || ".join(f"github.event.pull_request.head.ref == '{head}'" for head in self.HEADS)
+        return (
+            "${{ always() && !cancelled()"
+            " && github.event_name == 'pull_request_target' && github.event.action == 'labeled'"
+            f" && github.event.label.name == 'e2e:order-{order}'"
+            " && github.event.pull_request.base.ref == 'e2e/workload-base'"
+            " && github.event.pull_request.head.repo.full_name == github.repository"
+            f" && ({heads}) }}}}"
+        )
+
+    def test_runs_only_on_a_label_with_a_read_only_token(self) -> None:
+        self.assertEqual(self.workflow["on"], {"pull_request_target": {"types": ["labeled"]}})
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertEqual(
+            self.workflow["concurrency"],
+            {"group": "e2e-${{ github.event.pull_request.number }}", "cancel-in-progress": False},
+        )
+        for job in self.workflow["jobs"].values():
+            self.assertNotIn("permissions", job)
+
+    def test_eighteen_jobs_in_three_orders_on_two_architectures(self) -> None:
+        jobs = self.workflow["jobs"]
+        expected = {}
+        for arch, runner in self.ARCHES.items():
+            for order, variants in self.ORDERS.items():
+                for position, variant in enumerate(variants, 1):
+                    expected[f"{arch}-{order.lower()}{position}"] = (arch, runner, order, position, variant)
+        self.assertEqual(set(jobs), set(expected))
+        for key, (arch, runner, order, position, variant) in expected.items():
+            job = jobs[key]
+            with self.subTest(job=key):
+                self.assertEqual(job["name"], f"{arch} {order}{position} {variant}")
+                self.assertEqual(job["runs-on"], runner)
+                self.assertEqual(job["if"], self.condition(order))
+                if position == 1:
+                    self.assertNotIn("needs", job)
+                else:
+                    self.assertEqual(job["needs"], f"{arch}-{order.lower()}{position - 1}")
+                self.assertEqual(set(job), {"name", "if", "runs-on", "steps"} | ({"needs"} if position > 1 else set()))
+
+    def test_each_job_is_the_metadata_step_then_its_own_variant(self) -> None:
+        scripts = set()
+        for key, job in self.workflow["jobs"].items():
+            variant = job["name"].rsplit(" ", 1)[1]
+            with self.subTest(job=key):
+                metadata, action = job["steps"]
+                self.assertEqual(set(metadata), {"name", "shell", "env", "run"})
+                self.assertEqual(metadata["name"], "E2E trusted event metadata")
+                self.assertEqual(metadata["shell"], "bash")
+                # No expression reaches the script, so no event text can.
+                self.assertNotIn("${{", metadata["run"])
+                self.assertTrue(metadata["run"].startswith("# e2e-metadata v1"))
+                scripts.add(metadata["run"])
+
+                self.assertEqual(set(action), {"name", "uses", "with"})
+                self.assertEqual(action["name"], f"Variant {variant}")
+                self.assertEqual(action["uses"], self.REFS[variant])
+                self.assertEqual(action["with"], {"require-model-attribution": True, "hidden-unicode": "error"})
+                self.assertEqual(
+                    metadata["env"],
+                    {
+                        "E2E_REQUIRE_MODEL_ATTRIBUTION": str(action["with"]["require-model-attribution"]).lower(),
+                        "E2E_HIDDEN_UNICODE": action["with"]["hidden-unicode"],
+                    },
+                )
+        self.assertEqual(len(scripts), 1)
+
+    def test_no_other_action_anywhere_in_the_file(self) -> None:
+        uses = [line.strip() for line in self.path.read_text(encoding="utf-8").splitlines() if "uses:" in line]
+        allowed = {f"uses: {ref}{self.COMMENTS[variant]}" for variant, ref in self.REFS.items()}
+        self.assertEqual(len(uses), 18)
+        self.assertEqual(set(uses), allowed)
+        for forbidden in ("actions/checkout", "actions/cache", "actions/setup-", "./"):
+            self.assertNotIn(f"uses: {forbidden}", self.path.read_text(encoding="utf-8"))
+
+    def test_the_contract_describes_this_controller(self) -> None:
+        contract = self.contract
+        self.assertEqual(contract["controller"]["workflow_path"], f".github/workflows/{_STUDY}")
+        self.assertEqual(contract["inputs"], {"require-model-attribution": "true", "hidden-unicode": "error"})
+        self.assertEqual(contract["architectures"], self.ARCHES)
+        for variant, ref in self.REFS.items():
+            self.assertEqual(f"stickerdaniel/agent-guardrails@{contract['variants'][variant]['sha']}", ref)
+            self.assertEqual(contract["variants"][variant]["step"], f"Variant {variant}")
+        for order, variants in self.ORDERS.items():
+            self.assertEqual(contract["orders"][order], {"label": f"e2e:order-{order}", "variants": list(variants)})
+        by_name = {job["name"]: key for key, job in self.workflow["jobs"].items()}
+        self.assertEqual(set(contract["jobs"]), set(by_name))
+        for name, spec in contract["jobs"].items():
+            self.assertEqual(spec["key"], by_name[name])
+            self.assertEqual(f"{spec['arch']} {spec['order']}{spec['position']} {spec['variant']}", name)
+
+
+# A synthetic pull_request_target event of a fixture pull request.
+def _study_event(**pull: object) -> dict:
+    pull_request = {
+        "number": 7,
+        "title": 'Title with "quotes", a \\, é and controls \u0001\u001f\u007f',
+        "body": "Body line\r\nwith a tab\there and 日本",
+        "user": {"login": "maintainer"},
+        "base": {"ref": "e2e/workload-base", "sha": "a" * 40},
+        "head": {"sha": "b" * 40},
+    }
+    pull_request.update(pull)
+    return {"action": "labeled", "label": {"name": "e2e:order-B"}, "pull_request": pull_request}
+
+
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq") and shutil.which("sha256sum"), "needs bash, jq and sha256sum"
+)
+class StudyMetadataStepTests(unittest.TestCase):
+    """Runs the controller's metadata script as the runner would."""
+
+    def run_script(self, event: dict) -> subprocess.CompletedProcess:
+        job = _load(_WORKFLOWS / _STUDY)["jobs"]["x64-a1"]
+        step = job["steps"][0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "event.json"
+            path.write_text(json.dumps(event), encoding="utf-8")
+            env = {
+                "PATH": os.environ.get("PATH", os.defpath),
+                "GITHUB_EVENT_PATH": str(path),
+                "GITHUB_EVENT_NAME": "pull_request_target",
+                "GITHUB_REPOSITORY": "stickerdaniel/agent-guardrails",
+                "GITHUB_SERVER_URL": "https://github.com",
+                "GITHUB_WORKFLOW_SHA": "c" * 40,
+                "GITHUB_WORKFLOW_REF": "stickerdaniel/agent-guardrails/.github/workflows/e2e-benchmark.yml@refs/heads/main",
+                "GITHUB_RUN_ID": "123",
+                "GITHUB_RUN_ATTEMPT": "1",
+                **step["env"],
+            }
+            return subprocess.run(
+                ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
+                env=env, capture_output=True, text=True, timeout=60,
+            )
+
+    def metadata(self, result: subprocess.CompletedProcess) -> dict:
+        lines = result.stdout.splitlines()
+        self.assertTrue(all(line.startswith("e2e-meta v1 ") for line in lines), lines)
+        return dict(line[len("e2e-meta v1 "):].split("=", 1) for line in lines)
+
+    def test_prints_the_digest_and_named_fields_only(self) -> None:
+        from e2e import analyze
+
+        event = _study_event()
+        result = self.run_script(event)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        meta = self.metadata(result)
+        self.assertEqual(list(meta), list(analyze.METADATA_KEYS))
+        pull = event["pull_request"]
+        self.assertEqual(
+            meta["digest"],
+            analyze.event_digest(7, "b" * 40, "a" * 40, "e2e/workload-base", pull["title"], pull["body"], "maintainer"),
+        )
+        self.assertEqual((meta["label"], meta["number"], meta["run_id"]), ("e2e:order-B", "7", "123"))
+        self.assertEqual((meta["require_model_attribution"], meta["hidden_unicode"]), ("true", "error"))
+        for text in ("Title with", "Body line", "maintainer"):
+            self.assertNotIn(text, result.stdout + result.stderr)
+
+    def test_a_null_body_and_an_empty_body_differ(self) -> None:
+        null = self.metadata(self.run_script(_study_event(body=None)))["digest"]
+        empty = self.metadata(self.run_script(_study_event(body="")))["digest"]
+        self.assertNotEqual(null, empty)
+
+    def test_fails_closed_on_an_unexpected_event(self) -> None:
+        for event in (
+            _study_event(body=3),
+            _study_event(number="7"),
+            {**_study_event(), "label": {"name": "e2e:order-D"}},
+            _study_event(base={"ref": "main", "sha": "a" * 40}),
+            _study_event(head={"sha": "B" * 40}),
+        ):
+            with self.subTest(event=event):
+                result = self.run_script(event)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("digest=", result.stdout)
+                self.assertIn("e2e-metadata: this is not a labeled event", result.stderr)
 
 
 if __name__ == "__main__":
