@@ -654,11 +654,12 @@ def _annotations(records: Records, folder: str, job_id) -> tuple[list, str | Non
     """A job's check-run annotations as {level, text}, flattened from the
     pages collect.py kept, and why they cannot be used, if they cannot. A
     listing shorter than the check run's own count is not evidence: a
-    truncated page can drop exactly the annotation that matters."""
+    truncated page can drop exactly the annotation that matters. Nor is a
+    listing that was never kept: collect.py keeps both records for every
+    job that ran, an empty page and a count of 0 included, so their absence
+    means the annotations are unknown, not that there are none."""
     kept = records.json(f"{folder}/annotations/{job_id}.json")
     check_run = records.json(f"{folder}/check-runs/{job_id}.json")
-    if kept is None and check_run is None:
-        return [], None
     items = [item for page in kept or [] for item in (page if isinstance(page, list) else [page])]
     count = ((check_run or {}).get("output") or {}).get("annotations_count")
     if kept is None or not isinstance(count, int) or len(items) != count:

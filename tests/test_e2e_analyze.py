@@ -232,9 +232,14 @@ class Study:
             for job_id, log in run["logs"].items():
                 if log is not None:
                     save(f"{folder}/logs/{job_id}.log", self.render(log).encode("utf-8"))
-            for job_id, messages in run["annotations"].items():
-                # As collect.py keeps them: every page gh api --paginate
-                # --slurp returned, and the check run that counts them.
+            ran = [job["id"] for job in run["jobs"] if job["conclusion"] != "skipped"]
+            for job_id in ran:
+                if job_id in run.get("drop_annotations", ()):
+                    continue
+                messages = run["annotations"].get(job_id, [])
+                # As collect.py keeps them for every job that ran: every page
+                # gh api --paginate --slurp returned, an empty page when there
+                # are none, and the check run that counts them.
                 annotations = [
                     {"path": ".github", "start_line": 1, "annotation_level": "failure", "title": "", "message": message}
                     for message in messages
@@ -580,6 +585,21 @@ class AnalyzerTests(unittest.TestCase):
         result = self.study.analyze()
         self.assertEqual(result["status"], "paused", result["reasons"])
         self.assertIn("annotations", " ".join(result["reasons"]["pause"]))
+
+    def test_missing_annotation_records_are_not_an_empty_set(self) -> None:
+        # The log attests a terminal 503, but neither the annotation listing
+        # nor its check run was kept: the annotations are unknown, not none.
+        self.study.measured_series()
+        original = self.study.dispatches[0]
+        job = self.infrastructure_failure(original["run_id"])
+        self.study.runs[original["run_id"]]["drop_annotations"] = {job["id"]}
+        paused = self.study.analyze()
+        self.assertEqual(paused["status"], "paused", paused["reasons"])
+        self.assertEqual(paused["replacements"]["awaiting"], [])
+        self.assertIn("annotations are incomplete", " ".join(paused["reasons"]["pause"]))
+        # Nor does a replacement complete the series.
+        self.study.dispatch(original["workload"], original["order"], replaces=original["seq"])
+        self.assert_closed(self.study.analyze(), "", "no unreplaced infrastructure round")
 
     def test_a_started_variant_is_never_infrastructure(self) -> None:
         self.study.measured_series()
