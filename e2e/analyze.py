@@ -388,7 +388,7 @@ def _check_frozen(contract: dict, manifest: dict) -> None:
             )
     if contract["schedule"]["sequence"] != schedule():
         raise ContractError("the contract's schedule is not the frozen one")
-    for kind in ("provider", "candidate"):
+    for kind in ("terminal_error", "annotation", "candidate"):
         patterns = contract["infrastructure_evidence"].get(kind)
         if not isinstance(patterns, list) or not patterns:
             raise ContractError(f"the contract lists no {kind} evidence patterns")
@@ -448,25 +448,33 @@ def _variant_started(job: dict, step_name: str, log: JobLog | None) -> bool:
 
 
 def _evidence(log: JobLog | None, annotations: list, patterns: dict) -> tuple[str | None, str | None]:
-    """The first log line or check-run annotation that shows the candidate's
-    own package failing to resolve or load, and the first that shows the
-    provider failing, each by the contract's frozen patterns."""
-    texts = [line for _, line in log.lines] if log is not None else []
-    texts += annotations
-    found = []
-    for kind in ("candidate", "provider"):
-        found.append(next(
-            (text[:240] for text in texts if any(re.search(pattern, text) for pattern in patterns[kind])),
-            None,
-        ))
-    return found[0], found[1]
+    """What the records say about a job that failed before its variant ran,
+    by the contract's frozen patterns. First, any log line or annotation
+    that shows the candidate's own package failing to resolve or load.
+    Second, a provider failure named by the job's TERMINAL error, the last
+    ##[error] line of the log, or by a failure-level annotation. Retry
+    warnings before the terminal error are never provider evidence: the
+    runner retries a 503 and then reports whatever ended the job."""
+    lines = [line for _, line in log.lines] if log is not None else []
+    texts = lines + [annotation["text"] for annotation in annotations]
+
+    def first(candidates, kind):
+        matching = (
+            text for text in candidates if any(re.search(pattern, text) for pattern in patterns[kind])
+        )
+        return next((text[:240] for text in matching), None)
+
+    owned = first(texts, "candidate")
+    terminal = [line for line in lines if line.startswith("##[error]")][-1:]
+    failures = [annotation["text"] for annotation in annotations if annotation["level"] == "failure"]
+    return owned, first(terminal, "terminal_error") or first(failures, "annotation")
 
 
 def validate_job(
     job: dict, log_text: str | None, spec: dict, context: dict, annotations: list | None = None
 ) -> JobResult:
     """Everything one attempt-1 job must show to count as a sample.
-    annotations are the messages of the job's check-run annotations."""
+    annotations are the job's check-run annotations, each {level, text}."""
     contract, manifest = context["contract"], context["manifest"]
     workload, run_id = context["workload"], context["run_id"]
     result = JobResult(
@@ -507,6 +515,18 @@ def validate_job(
     log = parse_log(log_text) if log_text is not None else None
     result.spans = dict(log.spans) if log else {key: UNAVAILABLE for key in SPANS}
     expected_conclusion = fixture["expected_conclusion"]
+    runtime, arch = contract["runtime"], spec["arch"]
+    # The image a job ran on, whenever its log shows it, and before anything
+    # decides whether the job can be replaced: a replacement cannot hide
+    # that the image moved. A log that is not there shows no image, and
+    # that is not drift.
+    images = (
+        ("image", log.image if log else None, "runner image"),
+        ("image_version", log.image_version if log else None, "runner image version"),
+    )
+    for key, observed, what in images:
+        if observed and observed != runtime[key][arch]:
+            result.flag(DRIFT, f"the {what} {observed!r} is not the contract's {runtime[key][arch]!r}")
     # A failure before the variant ran is judged by what the records show,
     # also for W4, whose designed failure comes from the variant. Only a
     # positively attested provider failure can be replaced; the candidate's
@@ -576,17 +596,11 @@ def validate_job(
     if log.action_started and log.action_sha != variant["sha"]:
         result.flag(PROTOCOL, f"the job ran {log.action_sha}, not {variant['sha']}")
 
-    runtime, arch = contract["runtime"], spec["arch"]
-    # The image a job ran on, whatever the variant: a job that cannot show
-    # it cannot show it ran on the frozen one.
-    for key, observed, what in (
-        ("image", log.image, "runner image"),
-        ("image_version", log.image_version, "runner image version"),
-    ):
+    # A job that got this far without showing its image cannot show it ran
+    # on the frozen one.
+    for _, observed, what in images:
         if not observed:
             result.flag(PROTOCOL, f"the log shows no {what}")
-        elif observed != runtime[key][arch]:
-            result.flag(DRIFT, f"the {what} {observed!r} is not the contract's {runtime[key][arch]!r}")
     if log.action_started:
         if log.git != runtime["git"][arch]:
             result.flag(DRIFT, f"{log.git!r} is not the contract's {runtime['git'][arch]!r}")
@@ -634,6 +648,28 @@ class Dispatch:
         self.problems.append(f"{judgement}: {problem}")
         if _RANK[judgement] > _RANK[self.judgement]:
             self.judgement = judgement
+
+
+def _annotations(records: Records, folder: str, job_id) -> tuple[list, str | None]:
+    """A job's check-run annotations as {level, text}, flattened from the
+    pages collect.py kept, and why they cannot be used, if they cannot. A
+    listing shorter than the check run's own count is not evidence: a
+    truncated page can drop exactly the annotation that matters."""
+    kept = records.json(f"{folder}/annotations/{job_id}.json")
+    check_run = records.json(f"{folder}/check-runs/{job_id}.json")
+    if kept is None and check_run is None:
+        return [], None
+    items = [item for page in kept or [] for item in (page if isinstance(page, list) else [page])]
+    count = ((check_run or {}).get("output") or {}).get("annotations_count")
+    if kept is None or not isinstance(count, int) or len(items) != count:
+        return [], f"its annotations are incomplete: {len(items)} kept, the check run counts {count}"
+    return [
+        {
+            "level": item.get("annotation_level"),
+            "text": f"{item.get('title') or ''} {item.get('message') or ''}".strip(),
+        }
+        for item in items
+    ], None
 
 
 def validate_dispatch(entry: dict, records: Records, contract: dict, manifest: dict) -> Dispatch:
@@ -691,10 +727,9 @@ def validate_dispatch(entry: dict, records: Records, contract: dict, manifest: d
                 )
             continue
         log = records.read(f"{folder}/logs/{job.get('id')}.log")
-        annotations = [
-            f"{item.get('title') or ''} {item.get('message') or ''}".strip()
-            for item in records.json(f"{folder}/annotations/{job.get('id')}.json") or []
-        ]
+        annotations, incomplete = _annotations(records, folder, job.get("id"))
+        if incomplete:
+            dispatch.flag(AMBIGUOUS, f"{name}: {incomplete}")
         text = None if log is None else log.decode("utf-8", "replace")
         result = validate_job(job, text, spec, context, annotations)
         dispatch.jobs.append(result)

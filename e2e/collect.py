@@ -9,7 +9,8 @@ every job that ran:
 
     RECORDS/runs/<run>/run.json, jobs.json, timing.json, logs.zip
     RECORDS/runs/<run>/logs/<job>.log
-    RECORDS/runs/<run>/annotations/<job>.json
+    RECORDS/runs/<run>/annotations/<job>.json   every page of them
+    RECORDS/runs/<run>/check-runs/<job>.json    their count
 
 tip saves the current e2e/workload-base ref as RECORDS/tips/<NAME>.json, the
 evidence behind a ledger's base_tip_before and base_tip_after.
@@ -53,6 +54,21 @@ def gh_get(path: str) -> bytes:
     return proc.stdout
 
 
+def gh_get_pages(path: str) -> bytes:
+    """Every page of one list endpoint, as gh api --paginate --slurp prints
+    them: a JSON array with one array per page."""
+    proc = subprocess.run(
+        [
+            "gh", "api", "--method", "GET", "--paginate", "--slurp", "--allow-escape-sequences",
+            "-H", "Accept: application/vnd.github+json", path,
+        ],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise CollectError(f"GET {path} failed: {proc.stderr.decode('utf-8', 'replace').strip()}")
+    return proc.stdout
+
+
 class Store:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -83,8 +99,9 @@ class Store:
         self.index_path.write_text(json.dumps(self.index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def collect_run(store: Store, run_id: int, get=gh_get) -> list[str]:
-    """Save one run's records; return the names saved."""
+def collect_run(store: Store, run_id: int, get=gh_get, get_pages=None) -> list[str]:
+    """Save one run's records; return the names saved. get_pages fetches
+    every page of a list endpoint, gh_get_pages unless given."""
     base = f"repos/{REPOSITORY}/actions/runs/{run_id}"
     folder = f"runs/{run_id}"
     saved = []
@@ -109,10 +126,19 @@ def collect_run(store: Store, run_id: int, get=gh_get) -> list[str]:
         if job.get("conclusion") == "skipped" or job.get("started_at") is None:
             continue
         # The annotations are the provider's own record of a lost runner,
-        # which may leave no log behind, so they are kept first.
-        path = f"repos/{REPOSITORY}/check-runs/{job['id']}/annotations"
-        store.save(f"{folder}/annotations/{job['id']}.json", get(path), path)
-        saved.append(f"{folder}/annotations/{job['id']}.json")
+        # which may leave no log behind, so they are kept first: every page,
+        # and the check run whose count proves none is missing.
+        check_path = f"repos/{REPOSITORY}/check-runs/{job['id']}"
+        check_run = get(check_path)
+        count = (json.loads(check_run).get("output") or {}).get("annotations_count")
+        path = f"{check_path}/annotations?per_page=100"
+        pages = (get_pages or gh_get_pages)(path)
+        kept = sum(len(page) for page in json.loads(pages))
+        if kept != count:
+            raise CollectError(f"job {job['id']} has {count} annotations, but {kept} came back")
+        store.save(f"{folder}/check-runs/{job['id']}.json", check_run, check_path)
+        store.save(f"{folder}/annotations/{job['id']}.json", pages, path)
+        saved += [f"{folder}/check-runs/{job['id']}.json", f"{folder}/annotations/{job['id']}.json"]
         path = f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs"
         try:
             log = get(path)

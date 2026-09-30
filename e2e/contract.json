@@ -632,7 +632,7 @@
     "A round counts only when all six of its jobs are valid and the twelve other jobs were skipped.",
     "W4's exit 1 is its expected result; a W4 success is a candidate defect.",
     "A candidate defect, a protocol deviation, runtime or table drift, or an operator cancel after the first measured dispatch closes the attempt incomplete. A successor needs a new, separately approved preregistration.",
-    "An infrastructure failure discards the whole round for all variants. One replacement of the same workload and order is appended; at most three in total. It is eligible only when the variant never started, by both the Jobs API steps and the log, and a retained log line or check-run annotation matches a provider pattern in infrastructure_evidence while none matches a candidate pattern.",
+    "An infrastructure failure discards the whole round for all variants. One replacement of the same workload and order is appended; at most three in total. It is eligible only when the variant never started, by both the Jobs API steps and the log, and the job's terminal ##[error] line or a failure-level check-run annotation, all pages of which were kept, names a provider cause by infrastructure_evidence, while nothing matches a candidate pattern. The job's image, when its log shows one, must still be the frozen image.",
     "A failure before the variant started whose records match a candidate pattern (the candidate's own reference failing to resolve or its package failing to load) is a candidate defect and never enters the replacement pool.",
     "Any other failure before the variant started, including a failed set-up or a missing log without provider evidence, is ambiguous.",
     "An ambiguous cause pauses the series for review, which then closes the attempt rather than relabel it.",
@@ -640,15 +640,19 @@
     "base_tip_before and base_tip_after of every dispatch must equal the frozen base."
   ],
   "infrastructure_evidence": {
-    "note": "Python regular expressions, searched in each log line and each check-run annotation of a job that failed before its variant started. Taken from actions/runner src/Runner.Worker (ActionManager.cs, ActionManifestManager.cs, ActionNotFoundException.cs, JobRunner.cs) and GitHub's lost-runner annotation. Frozen with the contract; confirmed or extended only before the hash, never after a measured round.",
-    "provider": [
-      "^##\\[warning\\]Failed to download action '[^']+'\\. Error: ",
-      "^##\\[warning\\]Action '[^']+' didn't finish download within \\d+ seconds",
-      "Action '[^']+' download has timed out",
-      "Failed to download archive '[^']+' after \\d+ attempts",
-      "^Failed to resolve action download info\\. Error: ",
-      "The runner has received a shutdown signal",
-      "lost communication with the server"
+    "note": "Python regular expressions for a job that failed before its variant started, checked against actions/runner v2.337.0, commit 397b032cbf865e9c3ddfab89d533ec19325e1273. terminal_error is matched only against the job's last ##[error] line, annotation only against failure-level check-run annotations; candidate against every log line and annotation, and a candidate match wins. A provider failure counts only when the terminal cause itself names it. Retry warnings (ActionManager.cs:1743, 1747, 1760) and the generic 'Failed to download archive ... after N attempts' wrapper (:1769, which also wraps a 404 whose inner cause only debug output shows) are never provider evidence. Sources: download timeout, ActionManager.cs:1723 wrapped at :1769 and printed as the inner message by InfrastructureError at :131; HTTP 5xx, EnsureSuccessStatusCode at :1710 after the retries, the inner HttpRequestException message printed at :131 (its text is .NET's System.Net.Http, not runner source); shutdown, JobRunner.cs:133 and :136, logged as an error issue at :141. 'lost communication with the server' is GitHub's server-side annotation for a lost hosted runner and is not in runner source. Candidate: ActionManager.cs:912 and :1544, :1697, ActionNotFoundException.cs:32 and :35, ActionManifestManager.cs:147; the remaining two are GitHub's server-side resolution messages. Frozen with the contract; confirmed or extended only before the hash, never after a measured round.",
+    "terminal_error": [
+      "^##\\[error\\]Action '[^']+' download has timed out\\. ",
+      "^##\\[error\\]Response status code does not indicate success: 5\\d\\d ",
+      "^##\\[error\\]The runner has received a shutdown signal\\. ",
+      "^##\\[error\\]Operating system is shutting down for computer "
+    ],
+    "annotation": [
+      "lost communication with the server",
+      "^Action '[^']+' download has timed out\\. ",
+      "^Response status code does not indicate success: 5\\d\\d ",
+      "^The runner has received a shutdown signal\\. ",
+      "^Operating system is shutting down for computer "
     ],
     "candidate": [
       "Can't find 'action\\.yml', 'action\\.yaml' or 'Dockerfile'",

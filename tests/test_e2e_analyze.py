@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from e2e import analyze, gen_workloads
 
@@ -35,7 +36,14 @@ _DOWNLOAD_FAILED = (
     "tarball/82427d58bc35a2146e3ce6209bbff8be7e2c6f3f'. Error: Response status code does not indicate "
     "success: 503 (Service Unavailable). (0400:1B2C:3D4E)"
 )
-_NO_MANIFEST = "##[error]Cannot find action.yml, action.yaml or Dockerfile in the downloaded action directory."
+_TARBALL = "https://api.github.com/repos/stickerdaniel/agent-guardrails/tarball/82427d58bc35a2146e3ce6209bbff8be7e2c6f3f"
+_BACK_OFF = "##[warning]Back off 12.5 seconds before retry."
+# Runner v2.337.0 (397b032c) ActionManager.cs:1723, the inner message its
+# terminal InfrastructureError prints, and :1769, the generic wrapper that
+# also wraps a 404.
+_TIMED_OUT = f"##[error]Action '{_TARBALL}' download has timed out. Error: The operation was canceled. 0400:1B2C"
+_WRAPPER = "##[error]Failed to download archive '" + _TARBALL + "' after {attempts} attempts."
+_NO_MANIFEST ="##[error]Cannot find action.yml, action.yaml or Dockerfile in the downloaded action directory."
 _RUNNER_LOST = (
     "The hosted runner: GitHub Actions 1000123 lost communication with the server. Anything in your "
     "workflow that terminates the runner process, starves it for CPU/Memory, or blocks its network "
@@ -169,10 +177,14 @@ class Study:
     def render(log: dict) -> str:
         """A raw job log as GET .../actions/jobs/<id>/logs returns it."""
         ticks = log["start"] * 10**7 + 1_234_567
+        image = (
+            ["##[group]Runner Image", f"Image: {log['image']}", f"Version: {log['image_version']}", "##[endgroup]"]
+            if log["image"] is not None else []
+        )
         lines = [
             "Current runner version: '2.337.0'",
             "##[group]Runner Image Provisioner", "Version: 20260828.587", "##[endgroup]",
-            "##[group]Runner Image", f"Image: {log['image']}", f"Version: {log['image_version']}", "##[endgroup]",
+            *image,
             "Getting action download info",
             f"Download action repository 'stickerdaniel/agent-guardrails@{log['sha']}' (SHA:{log['sha']})",
             *log["setup_extra"],
@@ -221,11 +233,19 @@ class Study:
                 if log is not None:
                     save(f"{folder}/logs/{job_id}.log", self.render(log).encode("utf-8"))
             for job_id, messages in run["annotations"].items():
+                # As collect.py keeps them: every page gh api --paginate
+                # --slurp returned, and the check run that counts them.
                 annotations = [
                     {"path": ".github", "start_line": 1, "annotation_level": "failure", "title": "", "message": message}
                     for message in messages
                 ]
-                save(f"{folder}/annotations/{job_id}.json", json.dumps(annotations).encode())
+                pages = [annotations[index:index + 30] for index in range(0, len(annotations), 30)] or [[]]
+                count = run.get("annotation_counts", {}).get(job_id, len(annotations))
+                if run.get("truncate_annotations"):
+                    pages = pages[:1]
+                save(f"{folder}/annotations/{job_id}.json", json.dumps(pages).encode())
+                check_run = {"id": job_id, "output": {"annotations_count": count}}
+                save(f"{folder}/check-runs/{job_id}.json", json.dumps(check_run).encode())
         (records / "index.json").write_text(json.dumps({"files": files}), encoding="utf-8")
         contract = self.root / "contract.json"
         contract.write_text(json.dumps(self.contract), encoding="utf-8")
@@ -437,7 +457,14 @@ class AnalyzerTests(unittest.TestCase):
         log = self.study.runs[run_id]["logs"][job["id"]]
         if evidence == "download":
             final = "##[error]Response status code does not indicate success: 503 (Service Unavailable)."
-            log.update(setup_only=True, setup_extra=[_DOWNLOAD_FAILED, final])
+            retries = [_DOWNLOAD_FAILED, _BACK_OFF] * 2
+            log.update(setup_only=True, setup_extra=[*retries, final])
+        elif evidence == "timeout":
+            log.update(setup_only=True, setup_extra=[_TIMED_OUT])
+        elif evidence == "wrapper":
+            log.update(setup_only=True, setup_extra=[_WRAPPER.format(attempts=1)])
+        elif evidence == "retry then wrapper":
+            log.update(setup_only=True, setup_extra=[_DOWNLOAD_FAILED, _BACK_OFF, _WRAPPER.format(attempts=2)])
         elif evidence == "manifest":
             log.update(setup_only=True, setup_extra=[_NO_MANIFEST])
         else:
@@ -492,6 +519,67 @@ class AnalyzerTests(unittest.TestCase):
         result = self.study.analyze()
         self.assertEqual(result["status"], "in_progress", result["reasons"])
         self.assertEqual(result["replacements"]["awaiting"], [original["seq"]])
+
+    def test_the_generic_download_wrapper_is_not_provider_evidence(self) -> None:
+        # Runner v2.337.0 wraps a 404 as well; only debug output would say which.
+        for evidence in ("wrapper", "retry then wrapper"):
+            with self.subTest(evidence=evidence):
+                self.setUp()
+                self.study.measured_series()
+                original = self.study.dispatches[0]
+                self.infrastructure_failure(original["run_id"], evidence=evidence)
+                result = self.study.analyze()
+                self.assertEqual(result["status"], "paused", result["reasons"])
+                self.assertEqual(result["ledger"][0]["judgement"], analyze.AMBIGUOUS)
+                self.study.dispatch(original["workload"], original["order"], replaces=original["seq"])
+                self.assert_closed(self.study.analyze(), "", "no unreplaced infrastructure round")
+
+    def test_a_terminal_download_timeout_is_infrastructure(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[0]
+        self.infrastructure_failure(original["run_id"], evidence="timeout")
+        self.study.dispatch(original["workload"], original["order"], replaces=original["seq"])
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "complete", result["reasons"])
+        self.assertEqual(result["ledger"][0]["judgement"], analyze.INFRASTRUCTURE)
+
+    def test_a_changed_image_on_an_infrastructure_failure_closes(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[0]
+        job = self.infrastructure_failure(original["run_id"])
+        self.study.runs[original["run_id"]]["logs"][job["id"]]["image_version"] = "20261001.999.1"
+        self.study.dispatch(original["workload"], original["order"], replaces=original["seq"])
+        self.assert_closed(self.study.analyze(), analyze.DRIFT, "20261001.999.1")
+
+    def test_a_log_without_its_image_invents_no_drift(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[0]
+        job = self.infrastructure_failure(original["run_id"])
+        self.study.runs[original["run_id"]]["logs"][job["id"]]["image"] = None
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "in_progress", result["reasons"])
+        self.assertEqual(result["ledger"][0]["judgement"], analyze.INFRASTRUCTURE)
+
+    def test_a_lost_runner_on_the_31st_annotation_counts(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[1]
+        job = self.infrastructure_failure(original["run_id"], evidence="none")
+        noise = ["Process completed with exit code 1."] * 30
+        self.study.runs[original["run_id"]]["annotations"][job["id"]] = noise + [_RUNNER_LOST]
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "in_progress", result["reasons"])
+        self.assertEqual(result["replacements"]["awaiting"], [original["seq"]])
+
+    def test_truncated_annotations_are_not_evidence(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[1]
+        job = self.infrastructure_failure(original["run_id"], evidence="none")
+        run = self.study.runs[original["run_id"]]
+        run["annotations"][job["id"]] = [_RUNNER_LOST] + ["Process completed with exit code 1."] * 30
+        run["truncate_annotations"] = True
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "paused", result["reasons"])
+        self.assertIn("annotations", " ".join(result["reasons"]["pause"]))
 
     def test_a_started_variant_is_never_infrastructure(self) -> None:
         self.study.measured_series()
@@ -591,7 +679,9 @@ class AnalyzerTests(unittest.TestCase):
 
 
 class CollectorTests(unittest.TestCase):
-    def test_saves_logs_and_annotations_of_jobs_that_ran(self) -> None:
+    """collect.py against a fake gh api that serves the recorded shapes."""
+
+    def run_collector(self, annotation_pages: list) -> tuple[list, dict, str]:
         from e2e import collect
 
         base = f"repos/{collect.REPOSITORY}"
@@ -600,14 +690,27 @@ class CollectorTests(unittest.TestCase):
             {"id": 2, "conclusion": "skipped", "started_at": "2026-10-01T00:00:00Z"},
             {"id": 3, "conclusion": "failure", "started_at": "2026-10-01T00:00:00Z"},
         ]
+        lost = [
+            {"annotation_level": "failure", "title": "", "message": message}
+            for message in ["Process completed with exit code 1."] * 30 + [_RUNNER_LOST]
+        ]
         responses = {
             f"{base}/actions/runs/7": b'{"id": 7, "status": "completed"}',
             f"{base}/actions/runs/7/jobs?filter=all&per_page=100": json.dumps({"total_count": 3, "jobs": jobs}).encode(),
             f"{base}/actions/runs/7/timing": b"{}",
             f"{base}/actions/runs/7/logs": b"PK",
+            f"{base}/check-runs/1": b'{"id": 1, "output": {"annotations_count": 0}}',
+            f"{base}/check-runs/3": b'{"id": 3, "output": {"annotations_count": 31}}',
+            # One page of the default 30: what a request without pagination gets.
             f"{base}/check-runs/1/annotations": b"[]",
-            f"{base}/check-runs/3/annotations": json.dumps([{"message": _RUNNER_LOST}]).encode(),
+            f"{base}/check-runs/3/annotations": json.dumps(lost[:30]).encode(),
             f"{base}/actions/jobs/1/logs": b"\xef\xbb\xbf2026-10-01T00:00:00.0000000Z hello\n",
+        }
+        pages = {
+            f"{base}/check-runs/1/annotations?per_page=100": [[]],
+            f"{base}/check-runs/3/annotations?per_page=100": [
+                [item for item in lost[start:start + 30]] for start in annotation_pages
+            ],
         }
 
         def get(path: str) -> bytes:
@@ -615,20 +718,41 @@ class CollectorTests(unittest.TestCase):
                 raise collect.CollectError(f"GET {path} failed: HTTP 404")
             return responses[path]
 
-        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()) as stderr:
+        def get_pages(path: str) -> bytes:
+            return json.dumps(pages[path]).encode()
+
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()) as stderr, \
+                mock.patch.object(collect, "gh_get_pages", get_pages, create=True):
             store = collect.Store(Path(directory))
             saved = collect.collect_run(store, 7, get)
             again = collect.collect_run(collect.Store(Path(directory)), 7, get)
+            self.assertEqual(saved, again)
             index = json.loads((Path(directory) / "index.json").read_text(encoding="utf-8"))["files"]
+            files = {}
             for name in saved:
                 data = (Path(directory) / name).read_bytes()
                 self.assertEqual(index[name]["sha256"], hashlib.sha256(data).hexdigest())
-        self.assertEqual(saved, again)
+                files[name] = json.loads(data) if name.endswith(".json") else data
+        return saved, files, stderr.getvalue()
+
+    def test_keeps_every_annotation_page_and_the_logs_of_jobs_that_ran(self) -> None:
+        saved, files, stderr = self.run_collector([0, 30])
         self.assertEqual(
             [name for name in saved if "/logs/" in name or "/annotations/" in name],
             ["runs/7/annotations/1.json", "runs/7/logs/1.log", "runs/7/annotations/3.json"],
         )
-        self.assertIn("no log for job 3", stderr.getvalue())
+        kept = files["runs/7/annotations/3.json"]
+        flat = [item for page in kept for item in (page if isinstance(page, list) else [page])]
+        self.assertEqual(len(flat), 31)
+        self.assertEqual(flat[-1]["message"], _RUNNER_LOST)
+        self.assertEqual(files["runs/7/check-runs/3.json"]["output"]["annotations_count"], 31)
+        self.assertIn("no log for job 3", stderr)
+
+    def test_refuses_annotations_fewer_than_the_check_run_counts(self) -> None:
+        from e2e import collect
+
+        with self.assertRaisesRegex(collect.CollectError, "31"):
+            self.run_collector([0])
 
 
 class EstimatorTests(unittest.TestCase):
