@@ -190,7 +190,7 @@ class Study:
             *log["setup_extra"],
         ]
         if log["setup_only"]:
-            return "﻿" + "".join(f"{_log_time(ticks + index * 1_000_000)} {line}\n" for index, line in enumerate(lines))
+            return "\ufeff" + "".join(f"{_log_time(ticks + index * 1_000_000)} {line}\n" for index, line in enumerate(lines))
         lines += [
             f"Complete job name: {log['name']}",
             "##[group]Run # e2e-metadata v1: a digest of this job's own event; no PR text is printed",

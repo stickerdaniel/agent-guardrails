@@ -268,7 +268,7 @@ def parse_log(text: str) -> JobLog:
     that is not there leaves its span unavailable, never zero."""
     log = JobLog()
     for raw in text.split("\n"):
-        raw = raw.rstrip("\r").lstrip("﻿")
+        raw = raw.rstrip("\r").lstrip("\ufeff")
         if not raw:
             continue
         match = _LOG_LINE.fullmatch(raw)

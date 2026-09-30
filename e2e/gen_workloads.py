@@ -542,8 +542,8 @@ def _w4() -> _Workload:
     lines = [f"Line {number:02d}: a failing workload for the CI cost study." for number in range(1, 41)]
     # A zero width joiner between two Latin letters, and a right-to-left
     # override on a line without right-to-left text.
-    lines[11] = "Line 12: the word jo‍ined hides a zero width joiner."
-    lines[26] = "Line 27: an override ‮reverses what follows on this line."
+    lines[11] = "Line 12: the word jo\u200dined hides a zero width joiner."
+    lines[26] = "Line 27: an override \u202ereverses what follows on this line."
     return _Workload(
         key="W4",
         name="failing",
