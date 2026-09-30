@@ -3,8 +3,10 @@ API and the raw job logs GitHub returns."""
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import tempfile
 import time
@@ -23,6 +25,21 @@ _RS_IDENTITY = "agent-guardrails native study; rustc 1.97.1; CPython 3.12.3; UCD
 _TS_IDENTITY = (
     "agent-guardrails TS-H study; node v24.19.0; CPython 3.12.3; UCD 15.0.0; tables " + "e" * 64
     + "; bundle " + "f" * 64 + "; git-guard " + "9" * 64
+)
+_IMAGES = {"x64": "ubuntu-24.04", "arm64": "ubuntu-24.04-arm"}
+_IMAGE_VERSION = "20260920.314.1"
+# What actions/runner prints when GitHub's tarball service fails a download
+# (ActionManager.cs) and what it throws when an action has no metadata file.
+_DOWNLOAD_FAILED = (
+    "##[warning]Failed to download action 'https://api.github.com/repos/stickerdaniel/agent-guardrails/"
+    "tarball/82427d58bc35a2146e3ce6209bbff8be7e2c6f3f'. Error: Response status code does not indicate "
+    "success: 503 (Service Unavailable). (0400:1B2C:3D4E)"
+)
+_NO_MANIFEST = "##[error]Cannot find action.yml, action.yaml or Dockerfile in the downloaded action directory."
+_RUNNER_LOST = (
+    "The hosted runner: GitHub Actions 1000123 lost communication with the server. Anything in your "
+    "workflow that terminates the runner process, starves it for CPU/Memory, or blocks its network "
+    "access can cause this error."
 )
 # SHA-256 of "E2E3-bootstrap-v1|20260929|W1|1|<draw>" mod 12, draws 1 to 12.
 _W1_REPLICATE_1 = [4, 4, 6, 9, 10, 4, 6, 8, 9, 1, 0, 2]
@@ -60,6 +77,9 @@ def filled_contract(manifest: dict) -> dict:
         runtime["git"][arch] = "git version 2.55.0"
         runtime["identity"]["RS"][arch] = _RS_IDENTITY
         runtime["identity"]["TS-H"][arch] = _TS_IDENTITY.replace("node v24.19.0;", "node <node>;")
+    runtime["image"] = dict(_IMAGES)
+    runtime["image_version"] = {arch: _IMAGE_VERSION for arch in analyze.ARCHES}
+    runtime["ts_h_node"] = {arch: "v24.19.0" for arch in analyze.ARCHES}
     return contract
 
 
@@ -123,6 +143,8 @@ class Study:
             logs[job_id] = {
                 "start": start, "name": name, "spec": spec, "meta": meta, "report": list(expected["log_lines"]),
                 "sha": contract["variants"][spec["variant"]]["sha"], "git": "git version 2.55.0", "cleanup": True,
+                "image": _IMAGES[spec["arch"]], "image_version": _IMAGE_VERSION, "node": "v24.19.0",
+                "setup_extra": [], "setup_only": False,
             }
         self.runs[run_id] = {
             "run": {"id": run_id, "run_attempt": 1, "event": "pull_request_target", "status": "completed",
@@ -130,6 +152,7 @@ class Study:
                     "created_at": _iso(created)},
             "jobs": jobs,
             "logs": logs,
+            "annotations": {},
         }
         base = contract["fixtures"]["base"]["sha"]
         self.dispatches.append({
@@ -149,9 +172,14 @@ class Study:
         lines = [
             "Current runner version: '2.337.0'",
             "##[group]Runner Image Provisioner", "Version: 20260828.587", "##[endgroup]",
-            "##[group]Runner Image", "Image: ubuntu-24.04", "Version: 20260920.314.1", "##[endgroup]",
+            "##[group]Runner Image", f"Image: {log['image']}", f"Version: {log['image_version']}", "##[endgroup]",
             "Getting action download info",
             f"Download action repository 'stickerdaniel/agent-guardrails@{log['sha']}' (SHA:{log['sha']})",
+            *log["setup_extra"],
+        ]
+        if log["setup_only"]:
+            return "﻿" + "".join(f"{_log_time(ticks + index * 1_000_000)} {line}\n" for index, line in enumerate(lines))
+        lines += [
             f"Complete job name: {log['name']}",
             "##[group]Run # e2e-metadata v1: a digest of this job's own event; no PR text is printed",
             "\x1b[36;1memit() { printf 'e2e-meta v1 %s=%s\\n' \"$1\" \"$2\"; }\x1b[0m",
@@ -161,7 +189,8 @@ class Study:
             f"##[group]Run stickerdaniel/agent-guardrails@{log['sha']}",
             "with:", "  require-model-attribution: true", "  hidden-unicode: error", "##[endgroup]",
             {"PY": "Python 3.12.3", "RS": f"agent-guardrails: {_RS_IDENTITY}",
-             "TS-H": f"agent-guardrails: {_TS_IDENTITY}"}[log["spec"]["variant"]],
+             "TS-H": "agent-guardrails: " + _TS_IDENTITY.replace("node v24.19.0;", "node " + log["node"] + ";")}[
+                log["spec"]["variant"]],
             f"agent-guardrails: {log['git']}",
         ]
         for line in log["report"]:
@@ -191,6 +220,12 @@ class Study:
             for job_id, log in run["logs"].items():
                 if log is not None:
                     save(f"{folder}/logs/{job_id}.log", self.render(log).encode("utf-8"))
+            for job_id, messages in run["annotations"].items():
+                annotations = [
+                    {"path": ".github", "start_line": 1, "annotation_level": "failure", "title": "", "message": message}
+                    for message in messages
+                ]
+                save(f"{folder}/annotations/{job_id}.json", json.dumps(annotations).encode())
         (records / "index.json").write_text(json.dumps({"files": files}), encoding="utf-8")
         contract = self.root / "contract.json"
         contract.write_text(json.dumps(self.contract), encoding="utf-8")
@@ -389,14 +424,27 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(result["status"], "paused", result["reasons"])
         self.assertIn("log is unavailable", result["reasons"]["pause"][0])
 
-    def infrastructure_failure(self, run_id: int) -> None:
-        """The provider failed one job while setting it up: no step ran."""
+    def infrastructure_failure(self, run_id: int, evidence: str = "download") -> dict:
+        """One job failed while it was set up, so no step after set-up ran.
+        evidence is what the records show: the tarball service failing the
+        download, the runner losing its server, nothing at all, or the
+        candidate's own package lacking its metadata file."""
         job = self.active(run_id, "TS-H")
         job["conclusion"] = "failure"
         job["steps"][0]["conclusion"] = "failure"
         for step in job["steps"][1:]:
             step.update(conclusion="skipped", started_at=None, completed_at=None)
-        self.study.runs[run_id]["logs"][job["id"]] = None
+        log = self.study.runs[run_id]["logs"][job["id"]]
+        if evidence == "download":
+            final = "##[error]Response status code does not indicate success: 503 (Service Unavailable)."
+            log.update(setup_only=True, setup_extra=[_DOWNLOAD_FAILED, final])
+        elif evidence == "manifest":
+            log.update(setup_only=True, setup_extra=[_NO_MANIFEST])
+        else:
+            self.study.runs[run_id]["logs"][job["id"]] = None
+            if evidence == "runner lost":
+                self.study.runs[run_id]["annotations"][job["id"]] = [_RUNNER_LOST]
+        return job
 
     def test_an_infrastructure_round_is_replaced_whole(self) -> None:
         self.study.measured_series()
@@ -417,6 +465,94 @@ class AnalyzerTests(unittest.TestCase):
         result = self.study.analyze()
         self.assertEqual(result["status"], "in_progress", result["reasons"])
         self.assertEqual(result["ledger"][original["seq"] - 1]["judgement"], analyze.INFRASTRUCTURE)
+
+    def test_a_set_up_failure_without_provider_evidence_is_ambiguous(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[0]
+        self.infrastructure_failure(original["run_id"], evidence="none")
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "paused", result["reasons"])
+        self.assertEqual(result["ledger"][0]["judgement"], analyze.AMBIGUOUS)
+        self.assertEqual(result["replacements"]["awaiting"], [])
+        # Nor does a replacement make it one.
+        self.study.dispatch(original["workload"], original["order"], replaces=original["seq"])
+        self.assert_closed(self.study.analyze(), "", "no unreplaced infrastructure round")
+
+    def test_a_package_without_its_metadata_file_is_a_candidate_defect(self) -> None:
+        self.study.measured_series()
+        self.infrastructure_failure(self.study.dispatches[0]["run_id"], evidence="manifest")
+        result = self.study.analyze()
+        self.assert_closed(result, analyze.DEFECT, "Cannot find action.yml")
+        self.assertEqual(result["replacements"]["awaiting"], [])
+
+    def test_a_runner_the_server_lost_is_infrastructure(self) -> None:
+        self.study.measured_series()
+        original = self.study.dispatches[1]
+        self.infrastructure_failure(original["run_id"], evidence="runner lost")
+        result = self.study.analyze()
+        self.assertEqual(result["status"], "in_progress", result["reasons"])
+        self.assertEqual(result["replacements"]["awaiting"], [original["seq"]])
+
+    def test_a_started_variant_is_never_infrastructure(self) -> None:
+        self.study.measured_series()
+        job = self.infrastructure_failure(self.study.dispatches[0]["run_id"])
+        job["steps"][2].update(conclusion="failure", started_at=job["started_at"], completed_at=job["completed_at"])
+        result = self.study.analyze()
+        self.assertEqual(result["ledger"][0]["judgement"], analyze.AMBIGUOUS, result["reasons"])
+        self.assertEqual(result["replacements"]["awaiting"], [])
+
+    def test_a_reused_run_closes_the_attempt(self) -> None:
+        # Twelve real runs, each listed again as rounds 4, 7 and 10 of the
+        # same workload and order: without a check, a complete series.
+        for slot in analyze.schedule()[:12]:
+            self.study.dispatch(slot["workload"], slot["order"], round_number=slot["round"])
+        first = {(entry["workload"], entry["order"]): entry for entry in self.study.dispatches}
+        self.study.dispatches = [
+            dict(first[(slot["workload"], slot["order"])], seq=seq) for seq, slot in enumerate(analyze.schedule(), 1)
+        ]
+        self.assert_closed(self.study.analyze(), "", "already used by dispatch 1")
+
+    def test_a_shakedown_run_cannot_count_as_measured(self) -> None:
+        self.study.dispatch("W3", "B", phase="shakedown")
+        self.study.measured_series()
+        self.study.dispatches[1]["run_id"] = self.study.dispatches[0]["run_id"]
+        self.assert_closed(self.study.analyze(), "", "already used by dispatch 1")
+
+    def test_a_ledger_out_of_run_chronology_closes_the_attempt(self) -> None:
+        self.study.measured_series()
+        first = self.study.runs[self.study.dispatches[0]["run_id"]]["run"]
+        last = self.study.runs[self.study.dispatches[-1]["run_id"]]["run"]
+        first["created_at"], last["created_at"] = last["created_at"], first["created_at"]
+        self.assert_closed(self.study.analyze(), "", "the ledger order is not the order of the runs")
+
+    def test_overlapping_rounds_close_the_attempt(self) -> None:
+        self.study.measured_series()
+        earlier = self.study.runs[self.study.dispatches[0]["run_id"]]
+        later = self.study.runs[self.study.dispatches[1]["run_id"]]["run"]
+        # After the first run began, but before its last job ended.
+        later["created_at"] = _iso(analyze.parse_time(earlier["run"]["created_at"]) + 100)
+        self.assert_closed(self.study.analyze(), "", "before the jobs of dispatch 1 ended")
+
+    def test_another_image_version_is_drift(self) -> None:
+        self.study.measured_series()
+        self.log(self.first("W3"), "TS-H")["image_version"] = "20261001.999.1"
+        self.assert_closed(self.study.analyze(), analyze.DRIFT, "20261001.999.1")
+
+    def test_another_image_is_drift(self) -> None:
+        self.study.measured_series()
+        self.log(self.first("W2"), "PY", "arm64")["image"] = "ubuntu-26.04-arm"
+        self.assert_closed(self.study.analyze(), analyze.DRIFT, "ubuntu-26.04-arm")
+
+    def test_another_ts_h_node_is_drift(self) -> None:
+        self.study.measured_series()
+        self.log(self.first("W3"), "TS-H")["node"] = "v24.20.0"
+        self.assert_closed(self.study.analyze(), analyze.DRIFT, "v24.20.0")
+
+    def test_an_unobserved_image_closes_the_attempt(self) -> None:
+        self.study.measured_series()
+        log = self.log(self.first("W1"), "RS")
+        log["image_version"] = ""
+        self.assert_closed(self.study.analyze(), analyze.PROTOCOL, "no runner image version")
 
     def test_more_than_three_replacements_close_the_attempt(self) -> None:
         self.study.measured_series()
@@ -454,6 +590,47 @@ class AnalyzerTests(unittest.TestCase):
             self.study.analyze()
 
 
+class CollectorTests(unittest.TestCase):
+    def test_saves_logs_and_annotations_of_jobs_that_ran(self) -> None:
+        from e2e import collect
+
+        base = f"repos/{collect.REPOSITORY}"
+        jobs = [
+            {"id": 1, "conclusion": "success", "started_at": "2026-10-01T00:00:00Z"},
+            {"id": 2, "conclusion": "skipped", "started_at": "2026-10-01T00:00:00Z"},
+            {"id": 3, "conclusion": "failure", "started_at": "2026-10-01T00:00:00Z"},
+        ]
+        responses = {
+            f"{base}/actions/runs/7": b'{"id": 7, "status": "completed"}',
+            f"{base}/actions/runs/7/jobs?filter=all&per_page=100": json.dumps({"total_count": 3, "jobs": jobs}).encode(),
+            f"{base}/actions/runs/7/timing": b"{}",
+            f"{base}/actions/runs/7/logs": b"PK",
+            f"{base}/check-runs/1/annotations": b"[]",
+            f"{base}/check-runs/3/annotations": json.dumps([{"message": _RUNNER_LOST}]).encode(),
+            f"{base}/actions/jobs/1/logs": b"\xef\xbb\xbf2026-10-01T00:00:00.0000000Z hello\n",
+        }
+
+        def get(path: str) -> bytes:
+            if path not in responses:
+                raise collect.CollectError(f"GET {path} failed: HTTP 404")
+            return responses[path]
+
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            store = collect.Store(Path(directory))
+            saved = collect.collect_run(store, 7, get)
+            again = collect.collect_run(collect.Store(Path(directory)), 7, get)
+            index = json.loads((Path(directory) / "index.json").read_text(encoding="utf-8"))["files"]
+            for name in saved:
+                data = (Path(directory) / name).read_bytes()
+                self.assertEqual(index[name]["sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(saved, again)
+        self.assertEqual(
+            [name for name in saved if "/logs/" in name or "/annotations/" in name],
+            ["runs/7/annotations/1.json", "runs/7/logs/1.log", "runs/7/annotations/3.json"],
+        )
+        self.assertIn("no log for job 3", stderr.getvalue())
+
+
 class EstimatorTests(unittest.TestCase):
     def test_bootstrap_draws_are_sha256_mod_12(self) -> None:
         for workload, replicate, draw in (("W1", 1, 1), ("W3", 20_000, 12), ("W2", 777, 5)):
@@ -478,9 +655,10 @@ class EstimatorTests(unittest.TestCase):
     def test_the_interval_takes_the_500th_and_19500th_replicate_means(self) -> None:
         indices = analyze.bootstrap_indices("W1")
         self.assertEqual(len(indices), 20_000)
-        values = list(range(12))
-        means = sorted(sum(values[index] for index in draw) / 12 for draw in indices)
-        self.assertEqual(analyze.bootstrap_interval(values, indices), [means[499], means[19_499]])
+        # Distinct powers make adjacent ranks differ, so an off-by-one rank
+        # cannot pass. Values computed from hashlib directly.
+        values = [13**power for power in range(12)]
+        self.assertEqual(analyze.bootstrap_interval(values, indices), [146884477.0, 461368993592.0])
 
     def test_median_coverage_of_the_3rd_and_10th_order_statistics(self) -> None:
         self.assertEqual(analyze.median_coverage(), 0.96142578125)

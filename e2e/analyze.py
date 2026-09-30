@@ -388,6 +388,17 @@ def _check_frozen(contract: dict, manifest: dict) -> None:
             )
     if contract["schedule"]["sequence"] != schedule():
         raise ContractError("the contract's schedule is not the frozen one")
+    for kind in ("provider", "candidate"):
+        patterns = contract["infrastructure_evidence"].get(kind)
+        if not isinstance(patterns, list) or not patterns:
+            raise ContractError(f"the contract lists no {kind} evidence patterns")
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error:
+                raise ContractError(
+                    f"the {kind} evidence pattern {pattern!r} is not a regular expression"
+                ) from None
     if contract["fixtures"]["base"]["sha"] != manifest["base"]["commit"]:
         raise ContractError("the contract's base differs from the manifest's")
     for key, workload in contract["fixtures"]["workloads"].items():
@@ -427,23 +438,35 @@ def _step(job: dict, name: str) -> dict | None:
     return next((step for step in job.get("steps") or [] if step.get("name") == name), None)
 
 
-def _infrastructure_before_candidate(job: dict, log: JobLog | None) -> bool:
-    """The provider failed the job before the candidate started: set-up
-    failed, or no step of the job ever ran, and no log shows the action."""
-    if log is not None and log.action_started:
-        return False
-    setup = _step(job, "Set up job")
-    if setup is not None and setup.get("conclusion") == "failure":
+def _variant_started(job: dict, step_name: str, log: JobLog | None) -> bool:
+    """Whether either record shows the variant's step beginning: the Jobs
+    API step, or the step's group line in the log."""
+    step = _step(job, step_name)
+    if step is not None and (step.get("started_at") or step.get("conclusion") not in (None, "skipped")):
         return True
-    ran = [
-        step for step in job.get("steps") or []
-        if step.get("name") != "Set up job" and step.get("started_at")
-    ]
-    return not ran
+    return log is not None and log.action_started
 
 
-def validate_job(job: dict, log_text: str | None, spec: dict, context: dict) -> JobResult:
-    """Everything one attempt-1 job must show to count as a sample."""
+def _evidence(log: JobLog | None, annotations: list, patterns: dict) -> tuple[str | None, str | None]:
+    """The first log line or check-run annotation that shows the candidate's
+    own package failing to resolve or load, and the first that shows the
+    provider failing, each by the contract's frozen patterns."""
+    texts = [line for _, line in log.lines] if log is not None else []
+    texts += annotations
+    found = []
+    for kind in ("candidate", "provider"):
+        found.append(next(
+            (text[:240] for text in texts if any(re.search(pattern, text) for pattern in patterns[kind])),
+            None,
+        ))
+    return found[0], found[1]
+
+
+def validate_job(
+    job: dict, log_text: str | None, spec: dict, context: dict, annotations: list | None = None
+) -> JobResult:
+    """Everything one attempt-1 job must show to count as a sample.
+    annotations are the messages of the job's check-run annotations."""
     contract, manifest = context["contract"], context["manifest"]
     workload, run_id = context["workload"], context["run_id"]
     result = JobResult(
@@ -484,11 +507,29 @@ def validate_job(job: dict, log_text: str | None, spec: dict, context: dict) -> 
     log = parse_log(log_text) if log_text is not None else None
     result.spans = dict(log.spans) if log else {key: UNAVAILABLE for key in SPANS}
     expected_conclusion = fixture["expected_conclusion"]
-    # Also for W4: its designed failure comes from the variant, which here
-    # never started.
-    if job.get("conclusion") == "failure" and _infrastructure_before_candidate(job, log):
-        result.flag(INFRASTRUCTURE, "the provider failed the job before the candidate started")
-        return result
+    # A failure before the variant ran is judged by what the records show,
+    # also for W4, whose designed failure comes from the variant. Only a
+    # positively attested provider failure can be replaced; the candidate's
+    # own package failing to resolve or load is its defect; anything else is
+    # unexplained and goes to review.
+    if job.get("conclusion") == "failure":
+        if not _variant_started(job, variant["step"], log):
+            owned, provider = _evidence(log, annotations or [], contract["infrastructure_evidence"])
+            if owned:
+                result.flag(DEFECT, f"the candidate's own package failed before it ran: {owned}")
+            elif provider:
+                result.flag(
+                    INFRASTRUCTURE, f"the provider failed the job before the candidate started: {provider}"
+                )
+            else:
+                result.flag(
+                    AMBIGUOUS,
+                    "the job failed before the variant started, and no record shows a provider failure",
+                )
+            return result
+        if log is None or not log.action_started:
+            result.flag(AMBIGUOUS, "the Jobs API shows the variant step started, but its log does not")
+            return result
     if log is None:
         result.flag(AMBIGUOUS, "the job log is unavailable, so its identity cannot be checked")
         return result
@@ -535,16 +576,34 @@ def validate_job(job: dict, log_text: str | None, spec: dict, context: dict) -> 
     if log.action_started and log.action_sha != variant["sha"]:
         result.flag(PROTOCOL, f"the job ran {log.action_sha}, not {variant['sha']}")
 
-    runtime = contract["runtime"]
+    runtime, arch = contract["runtime"], spec["arch"]
+    # The image a job ran on, whatever the variant: a job that cannot show
+    # it cannot show it ran on the frozen one.
+    for key, observed, what in (
+        ("image", log.image, "runner image"),
+        ("image_version", log.image_version, "runner image version"),
+    ):
+        if not observed:
+            result.flag(PROTOCOL, f"the log shows no {what}")
+        elif observed != runtime[key][arch]:
+            result.flag(DRIFT, f"the {what} {observed!r} is not the contract's {runtime[key][arch]!r}")
     if log.action_started:
-        if log.git != runtime["git"][spec["arch"]]:
-            result.flag(DRIFT, f"{log.git!r} is not the contract's {runtime['git'][spec['arch']]!r}")
-        if spec["variant"] == "PY" and log.python != runtime["python"][spec["arch"]]:
-            result.flag(DRIFT, f"{log.python!r} is not the contract's {runtime['python'][spec['arch']]!r}")
+        if log.git != runtime["git"][arch]:
+            result.flag(DRIFT, f"{log.git!r} is not the contract's {runtime['git'][arch]!r}")
+        if spec["variant"] == "PY" and log.python != runtime["python"][arch]:
+            result.flag(DRIFT, f"{log.python!r} is not the contract's {runtime['python'][arch]!r}")
         if spec["variant"] in ("RS", "TS-H"):
             identity = _NODE.sub("node <node>;", log.identity) if log.identity else None
-            if identity != runtime["identity"][spec["variant"]][spec["arch"]]:
+            if identity != runtime["identity"][spec["variant"]][arch]:
                 result.flag(DRIFT, f"the identity line {log.identity!r} is not the contract's")
+        # The identity comparison leaves the Node version out; it is frozen
+        # on its own, since the runner, not the package, supplies it.
+        if spec["variant"] == "TS-H":
+            if not log.node:
+                result.flag(PROTOCOL, "the TS-H identity line names no Node version")
+            elif log.node != runtime["ts_h_node"][arch]:
+                frozen = runtime["ts_h_node"][arch]
+                result.flag(DRIFT, f"TS-H ran Node {log.node}, not the contract's {frozen}")
 
     conclusion = job.get("conclusion")
     if not log.action_started:
@@ -632,7 +691,12 @@ def validate_dispatch(entry: dict, records: Records, contract: dict, manifest: d
                 )
             continue
         log = records.read(f"{folder}/logs/{job.get('id')}.log")
-        result = validate_job(job, None if log is None else log.decode("utf-8", "replace"), spec, context)
+        annotations = [
+            f"{item.get('title') or ''} {item.get('message') or ''}".strip()
+            for item in records.json(f"{folder}/annotations/{job.get('id')}.json") or []
+        ]
+        text = None if log is None else log.decode("utf-8", "replace")
+        result = validate_job(job, text, spec, context, annotations)
         dispatch.jobs.append(result)
         for problem in result.problems:
             judgement = problem.split(":", 1)[0]
@@ -643,6 +707,21 @@ def validate_dispatch(entry: dict, records: Records, contract: dict, manifest: d
 
 
 # --- The attempt -----------------------------------------------------------------
+
+
+def _run_window(records: Records, run_id) -> tuple[int | None, int | None] | None:
+    """When a run was created and when its last attempt-1 job that ran
+    ended, from the retained API records; None without a run record."""
+    run = records.json(f"runs/{run_id}/run.json")
+    if run is None:
+        return None
+    jobs = records.json(f"runs/{run_id}/jobs.json") or {}
+    ends = [
+        parse_time(job.get("completed_at")) for job in jobs.get("jobs") or []
+        if job.get("run_attempt") == 1 and job.get("conclusion") != "skipped"
+    ]
+    ends = [end for end in ends if end is not None]
+    return parse_time(run.get("created_at")), max(ends) if ends else None
 
 
 def account(ledger: dict, records: Records, contract: dict, manifest: dict) -> dict:
@@ -657,6 +736,8 @@ def account(ledger: dict, records: Records, contract: dict, manifest: dict) -> d
     originals: dict[int, dict] = {}
     replaced: set[int] = set()
     replacements = 0
+    used: dict = {}
+    previous = None
     for position, entry in enumerate(ledger["dispatches"], 1):
         row = {"entry": entry, "slot": None, "dispatch": None, "judgement": None, "problems": []}
         rows.append(row)
@@ -667,6 +748,29 @@ def account(ledger: dict, records: Records, contract: dict, manifest: dict) -> d
 
         if entry.get("seq") != position:
             close(f"the ledger entry has seq {entry.get('seq')}")
+        # Every dispatch, shakedown, measured or replacement, is its own
+        # labeled event, and the ledger lists them in the order they ran:
+        # one round at a time.
+        run_id = entry.get("run_id")
+        if run_id in used:
+            close(f"run {run_id} was already used by dispatch {used[run_id]}")
+        else:
+            used[run_id] = position
+        window = _run_window(records, run_id)
+        if window is not None:
+            created, ended = window
+            if created is None:
+                close(f"run {run_id} has no creation time")
+            elif previous is not None:
+                before, (earlier_created, earlier_ended) = previous
+                if earlier_created is not None and created <= earlier_created:
+                    close(
+                        f"run {run_id} was created before dispatch {before}'s run, or with it; "
+                        "the ledger order is not the order of the runs"
+                    )
+                elif earlier_ended is not None and created < earlier_ended:
+                    close(f"run {run_id} was created before the jobs of dispatch {before} ended")
+            previous = (position, window)
         phase = entry.get("phase")
         if phase == "shakedown":
             row["judgement"] = "excluded (shakedown)"
@@ -954,6 +1058,10 @@ NOTES = [
     "minute model is modelled from public runs, not charged. Larger runners and Ubicloud were not measured.",
     "TS-H is a Node 24 action with a native Git supervisor, not a pure TypeScript action.",
     "Log spans are diagnostics, never billable duration. A missing log boundary is reported as unavailable.",
+    "A round is replaced only on a retained provider record, before the variant started, with no sign of "
+    "the candidate's own package failing; an unexplained failure pauses for review. Each dispatch is a "
+    "distinct run, in run order, one round at a time. The runner image, its version, git, Python and the "
+    "TS-H Node version are frozen per architecture; any change closes the attempt.",
 ]
 
 

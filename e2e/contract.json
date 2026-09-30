@@ -253,7 +253,19 @@
     }
   },
   "runtime": {
-    "note": "Filled from the shakedown: the PY python3 --version line, the git version line and the RS and TS-H identity lines, the TS-H one with its node version written as 'node <node>'. Any measured job that differs is drift and closes the attempt.",
+    "note": "Filled from the shakedown, per architecture: the runner image name and version from the log's 'Runner Image' group, the PY python3 --version line, the git version line, the RS and TS-H identity lines (the TS-H one with its Node version written as 'node <node>'), and the Node version TS-H executed. Any measured job that differs is drift and closes the attempt; a job whose log shows no image, image version or TS-H Node version is a protocol deviation. The runner version is recorded per job but not frozen, since the design names it as a record only.",
+    "image": {
+      "x64": null,
+      "arm64": null
+    },
+    "image_version": {
+      "x64": null,
+      "arm64": null
+    },
+    "ts_h_node": {
+      "x64": null,
+      "arm64": null
+    },
     "python": {
       "x64": null,
       "arm64": null
@@ -620,10 +632,34 @@
     "A round counts only when all six of its jobs are valid and the twelve other jobs were skipped.",
     "W4's exit 1 is its expected result; a W4 success is a candidate defect.",
     "A candidate defect, a protocol deviation, runtime or table drift, or an operator cancel after the first measured dispatch closes the attempt incomplete. A successor needs a new, separately approved preregistration.",
-    "An infrastructure failure, attested by the provider before the candidate started, discards the whole round for all variants. One replacement of the same workload and order is appended; at most three in total.",
+    "An infrastructure failure discards the whole round for all variants. One replacement of the same workload and order is appended; at most three in total. It is eligible only when the variant never started, by both the Jobs API steps and the log, and a retained log line or check-run annotation matches a provider pattern in infrastructure_evidence while none matches a candidate pattern.",
+    "A failure before the variant started whose records match a candidate pattern (the candidate's own reference failing to resolve or its package failing to load) is a candidate defect and never enters the replacement pool.",
+    "Any other failure before the variant started, including a failed set-up or a missing log without provider evidence, is ambiguous.",
     "An ambiguous cause pauses the series for review, which then closes the attempt rather than relabel it.",
+    "Every dispatch, shakedown, measured or replacement, is a distinct run. The ledger lists them in the order the runs were created, and each run is created only after the jobs of the one before it ended.",
     "base_tip_before and base_tip_after of every dispatch must equal the frozen base."
   ],
+  "infrastructure_evidence": {
+    "note": "Python regular expressions, searched in each log line and each check-run annotation of a job that failed before its variant started. Taken from actions/runner src/Runner.Worker (ActionManager.cs, ActionManifestManager.cs, ActionNotFoundException.cs, JobRunner.cs) and GitHub's lost-runner annotation. Frozen with the contract; confirmed or extended only before the hash, never after a measured round.",
+    "provider": [
+      "^##\\[warning\\]Failed to download action '[^']+'\\. Error: ",
+      "^##\\[warning\\]Action '[^']+' didn't finish download within \\d+ seconds",
+      "Action '[^']+' download has timed out",
+      "Failed to download archive '[^']+' after \\d+ attempts",
+      "^Failed to resolve action download info\\. Error: ",
+      "The runner has received a shutdown signal",
+      "lost communication with the server"
+    ],
+    "candidate": [
+      "Can't find 'action\\.yml', 'action\\.yaml' or 'Dockerfile'",
+      "Cannot find action\\.yml, action\\.yaml or Dockerfile",
+      "An action could not be found at the URI",
+      "Access denied to '",
+      "Failed to load \\S*action\\.ya?ml",
+      "Unable to resolve action",
+      "unable to find version"
+    ]
+  },
   "exclusions": [
     "The 72 shakedown jobs: protocol validation only, never timing.",
     "Skipped jobs, which are not samples.",

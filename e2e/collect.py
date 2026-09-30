@@ -4,10 +4,12 @@
     python3 e2e/collect.py tip --out RECORDS --name NAME
 
 runs saves, for each run, the run, its jobs of every attempt, the run timing
-endpoint, the run's logs.zip, and the raw log of every job that ran:
+endpoint, the run's logs.zip, and the raw log and check-run annotations of
+every job that ran:
 
     RECORDS/runs/<run>/run.json, jobs.json, timing.json, logs.zip
     RECORDS/runs/<run>/logs/<job>.log
+    RECORDS/runs/<run>/annotations/<job>.json
 
 tip saves the current e2e/workload-base ref as RECORDS/tips/<NAME>.json, the
 evidence behind a ledger's base_tip_before and base_tip_after.
@@ -103,11 +105,22 @@ def collect_run(store: Store, run_id: int, get=gh_get) -> list[str]:
         store.save(f"{folder}/{name}", data, path)
         saved.append(f"{folder}/{name}")
     for job in listing["jobs"]:
-        # A skipped job never ran and has no log.
+        # A skipped job never ran and has neither log nor annotations.
         if job.get("conclusion") == "skipped" or job.get("started_at") is None:
             continue
+        # The annotations are the provider's own record of a lost runner,
+        # which may leave no log behind, so they are kept first.
+        path = f"repos/{REPOSITORY}/check-runs/{job['id']}/annotations"
+        store.save(f"{folder}/annotations/{job['id']}.json", get(path), path)
+        saved.append(f"{folder}/annotations/{job['id']}.json")
         path = f"repos/{REPOSITORY}/actions/jobs/{job['id']}/logs"
-        store.save(f"{folder}/logs/{job['id']}.log", get(path), path)
+        try:
+            log = get(path)
+        except CollectError:
+            # Recorded as missing; the analyzer judges a job without a log.
+            print(f"collect: no log for job {job['id']}", file=sys.stderr)
+            continue
+        store.save(f"{folder}/logs/{job['id']}.log", log, path)
         saved.append(f"{folder}/logs/{job['id']}.log")
     return saved
 
