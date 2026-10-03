@@ -256,8 +256,8 @@ class CentralChecksTests(unittest.TestCase):
             for step in steps:
                 with self.subTest(workflow=path.name, uses=step["uses"]):
                     self.assertRegex(step["uses"], _PINNED.pattern + "$")
-                    line = next(line for line in text if f"uses: {step['uses']}" in line)
-                    self.assertRegex(line, _VERSION_COMMENT)
+                    for line in (line for line in text if f"uses: {step['uses']}" in line):
+                        self.assertRegex(line, _VERSION_COMMENT)
 
 
 if __name__ == "__main__":
