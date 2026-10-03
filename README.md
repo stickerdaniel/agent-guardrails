@@ -1,9 +1,15 @@
 # agent-guardrails
 
-[![CI](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A GitHub Action that fails a pull request when a coding agent signs it. It looks for a `Co-authored-by` trailer naming an agent in any commit message or in the PR body, and for an agent's address as a commit's author or committer. Squash merging can carry these trailers into the default branch. It checks the PR title and body, commit messages, and added text lines for hidden Unicode: invisible characters such as zero-width spaces, bidi controls and tag characters, private-use characters, and letters from another script that pass for Latin. Unusual spaces only warn. Optionally, it also requires the PR body to end with a line such as `Generated with Claude Opus 5`.
+A GitHub Action that fails pull requests signed by coding agents or carrying hidden Unicode.
+
+## What it catches
+
+- **Agents signing themselves into your history.** A `Co-authored-by` trailer naming a coding agent, in a commit message or the PR body. Squash merging copies it into your default branch.
+- **Commits made under an agent's identity.** A commit authored or committed by a coding agent's address, such as `noreply@anthropic.com`.
+- **Text reviewers cannot see.** Zero-width spaces, bidi controls, tag characters, private-use characters, and letters from another script that pass for Latin, in the title, body, commit messages, and added lines. Unusual spaces only warn.
+- **Undisclosed model use (opt-in).** A PR body whose last line is not `Generated with <model>`, such as `Generated with Claude Opus 5`.
 
 ## Usage
 
@@ -26,28 +32,34 @@ jobs:
           require-model-attribution: false
 ```
 
-Pin the commit SHA of a release. Make `check-bot-coauthors` a required status check, and keep the job free of an `if:`, because GitHub counts a skipped job as passing.
+Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
 
-| Input | Default | Values | Effect |
-| --- | --- | --- | --- |
-| `require-model-attribution` | `false` | `true`, `false` | With `true`, the last non-empty line of the PR body must read `Generated with <model>`, or the detailed `Generated with <model> for <job> in <harness>.` Pull requests opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
-| `hidden-unicode` | `error` | `error`, `warn` | With `warn`, hidden Unicode findings are warnings and do not fail the run. Every other finding still does, including a file that cannot be scanned. |
+## Configuration
 
-Any other value fails the run.
+| Input | Default | Effect |
+| --- | --- | --- |
+| `require-model-attribution` | `false` | `true` turns on the attribution check. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
+| `hidden-unicode` | `error` | `warn` reports hidden Unicode as warnings instead of failures. |
 
-## Changed files
+The trailer and identity checks always run. Any other input value fails the run.
 
-Text is checked on added lines compared with the merge base; a moved file counts as added. Git judges binary content on the **new side**, independently of the old file, when the patch is binary or has no text hunk. A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`; those and submodules are logged as unscanned. Git's binary classification includes NUL-containing files and files above its big-file threshold. An invalid UTF-8 path or added line fails; a mode-only change also checks the full new file for binary content and valid UTF-8, without treating unchanged lines as additions. Otherwise, unchanged text is not validated. PR `.gitattributes` cannot suppress this check.
+## How it works
 
-A run stops with an error, even with `hidden-unicode: warn`, if Git exceeds 64 MiB of standard output, two million output records or 600 seconds; scanning also stops past 100 million work units, 1,000 findings, four million characters on one line or 100,000 suspicious characters on one line. GitHub displays at most ten error and ten warning annotations per step; findings beyond that display limit still affect the exit status and remain in the log.
+The workflow and the pinned action come from your default branch. The action fetches the PR into a temporary repository and reads its commits, diff, title, and body as data, without checking out or running anything from the pull request. Every doubt fails the run, including a head that moved since the event.
 
-## Trust model
+<details>
+<summary>Limits and edge cases</summary>
 
-The workflow and the pinned action come from the base repository's default branch, never from the pull request. The action fetches the base branch and `refs/pull/<n>/head` from the base repository into a temporary bare repository and reads commits, the diff, and the PR title and body as data, without checking out or running anything from the pull request. The job token goes to git through the environment and is masked in the log, and every doubt fails the run, including a head that moved since the event and a range with no commits.
+- Added lines are compared with the merge base. A moved file counts as added.
+- A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`. Those and submodules are logged as unscanned. The PR's `.gitattributes` cannot change this.
+- An invalid UTF-8 path or added line fails.
+- The run fails, even with `hidden-unicode: warn`, past 64 MiB of Git output, two million output records, 600 seconds of Git, 100 million scan steps, 1,000 findings, or four million characters or 100,000 suspicious characters on one line.
+
+</details>
 
 ## Requirements
 
-Use a Linux or macOS runner with Python 3.10 or newer and git 2.31 or newer on `PATH`. GitHub-hosted Ubuntu runners have both. Windows runners are not supported.
+A Linux or macOS runner with Python 3.10+ and git 2.31+ on `PATH`. GitHub-hosted Ubuntu runners have both. Windows is not supported.
 
 ## License
 
