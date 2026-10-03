@@ -495,7 +495,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         # valid name holds; only the valid one is excluded.
         blob = self.remote.git("hash-object", "-w", "--stdin", stdin="clean\n")
         self.remote.git("update-index", "--add", "--cacheinfo", f"100644,{blob},fixtures/bad\udcff.txt")
-        head = self.remote.commit("Add", files={"fixtures/ok�.txt": f"a{_ZWSP}b\n"})
+        head = self.remote.commit("Add", files={"fixtures/ok\ufffd.txt": f"a{_ZWSP}b\n"})
         for hidden_unicode in ("error", "off"):
             with self.subTest(hidden_unicode=hidden_unicode):
                 result = self._run(
@@ -503,11 +503,11 @@ class PolicyDriverTests(_ChangedFileTestCase):
                 )
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn(
-                    "title=Cannot scan a changed file::cannot decode fixtures/bad�.txt",
+                    "title=Cannot scan a changed file::cannot decode fixtures/bad\ufffd.txt",
                     result.stdout,
                 )
                 self.assertIn(
-                    "agent-guardrails: not scanned (excluded): fixtures/ok�.txt\n", result.stdout
+                    "agent-guardrails: not scanned (excluded): fixtures/ok\ufffd.txt\n", result.stdout
                 )
                 self.assertNotIn("Invisible character", result.stdout)
 
@@ -532,7 +532,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         self.assertIn("ttf, wasm, wav", result.stdout)
 
     def test_every_unicode_rule_off(self) -> None:
-        line = "a​b prompt 10 km pаypal"
+        line = "a\u200bb prompt\ue000 10\u00a0km p\u0430ypal"
         head = self.remote.commit(f"Add {line}", files={"x.md": f"{line}\n"})
         result = self._run(head, {"hidden-unicode": "off"}, title=line, body=line)
         self.assertEqual(result.returncode, 0, result.stdout)

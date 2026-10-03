@@ -332,11 +332,11 @@ class InputTests(unittest.TestCase):
         # Only ASCII spaces and tabs are trimmed.
         self._refuses(
             "input additional-binary-extensions line 1: expected a lowercase extension",
-            {"additional-binary-extensions": "wasm "},
+            {"additional-binary-extensions": "wasm\u00a0"},
         )
 
     def test_exclude_paths(self) -> None:
-        valid = ["a", "a/b.txt", "a/", ".github/x/", ".hidden", "with space/x", "café/", "a..b"]
+        valid = ["a", "a/b.txt", "a/", ".github/x/", ".hidden", "with space/x", "caf\u00e9/", "a..b"]
         policy = _policy({"unicode-exclude-paths": "\n".join(valid)})
         self.assertEqual(policy.exclude_paths, tuple(valid))
         rejected = {
@@ -392,7 +392,7 @@ class InputTests(unittest.TestCase):
             "github:a_b",
             "github:" + "h" * 40,
             "github:bot[BOT]",
-            "github:café",
+            "github:caf\u00e9",
             "copilot@github.com",
             "Copilot",
         ]
@@ -538,9 +538,9 @@ class InputTests(unittest.TestCase):
         self._refuses(long, {"unicode-exclude-paths": "a" * 513})
         # Bytes, not characters.
         self.assertEqual(
-            _policy({"unicode-exclude-paths": "é" * 256}).exclude_paths, ("é" * 256,)
+            _policy({"unicode-exclude-paths": "\u00e9" * 256}).exclude_paths, ("\u00e9" * 256,)
         )
-        self._refuses(long, {"unicode-exclude-paths": "é" * 256 + "a"})
+        self._refuses(long, {"unicode-exclude-paths": "\u00e9" * 256 + "a"})
 
     def test_bytes_that_are_not_utf8_fail(self) -> None:
         raw = json.dumps(runner_inputs()).replace(

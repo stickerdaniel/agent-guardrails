@@ -333,7 +333,7 @@ class LimitTests(unittest.TestCase):
 
 
 # One of each: invisible, private-use, unusual space, look-alike word.
-_EVERY_RULE = "a​b prompt 10 km pаypal"
+_EVERY_RULE = "a\u200bb prompt\ue000 10\u00a0km p\u0430ypal"
 
 
 class EffectiveModeTests(unittest.TestCase):
@@ -391,7 +391,7 @@ class ExclusionTests(unittest.TestCase):
         for path, excluded in cases.items():
             with self.subTest(path=path):
                 findings = rules.check_changed_file(
-                    _changed(path, gitdata.TEXT, [(1, "a​b")]), self._POLICY
+                    _changed(path, gitdata.TEXT, [(1, "a\u200bb")]), self._POLICY
                 )
                 self.assertEqual(_titles(findings), [] if excluded else [_INVISIBLE])
                 self.assertIs(rules.is_excluded(path, self._POLICY), excluded)
@@ -460,14 +460,14 @@ class EnabledHitsTests(unittest.TestCase):
     _SPACES_OFF = policy({"unicode-unusual-spaces": "off"})
 
     def test_hits_of_a_rule_that_is_off_are_not_collected(self) -> None:
-        line = " " * 5000 + "​" * 3
+        line = "\u00a0" * 5000 + "\u200b" * 3
         with mock.patch.object(rules, "HIT_LIMIT", 1000):
             (finding,) = rules.check_unicode(line, "the PR body", self._SPACES_OFF)
         self.assertEqual(finding.title, _INVISIBLE)
         self.assertIn("has 3 invisible characters", finding.message)
 
     def test_hit_limit_counts_hits_of_rules_that_are_on(self) -> None:
-        noise = " " * 2000
+        noise = "\u00a0" * 2000
         with mock.patch.object(rules, "HIT_LIMIT", 1000):
             (finding,) = rules.check_unicode(noise + "\x01" * 1000, "the PR body", self._SPACES_OFF)
             self.assertIn("has 1000 invisible characters", finding.message)
@@ -480,7 +480,7 @@ class EnabledHitsTests(unittest.TestCase):
         off = policy({"unicode-homoglyphs": "off", "unicode-unusual-spaces": "off"})
         budget = rules.Budget()
         with mock.patch.object(rules, "FINDINGS_LIMIT", 2):
-            text = "pа " * 5 + "10 km"
+            text = "p\u0430 " * 5 + "10\u00a0km"
             self.assertEqual(rules.check_unicode(text, "the PR body", off, budget), [])
             for path in ("a.md", "b.md"):
                 rules.check_changed_file(_changed(path, gitdata.UNDECODABLE), off, budget)
@@ -488,7 +488,7 @@ class EnabledHitsTests(unittest.TestCase):
                 rules.check_changed_file(_changed("c.md", gitdata.REJECTED_BINARY), off, budget)
 
     def test_findings_before_a_limit_are_kept(self) -> None:
-        text = "pаy​\n" + "\x01" * 1001
+        text = "p\u0430y\u200b\n" + "\x01" * 1001
         with mock.patch.object(rules, "HIT_LIMIT", 1000):
             with self.assertRaises(rules.LimitReached) as caught:
                 rules.check_unicode(text, "the PR body", policy({"unicode-homoglyphs": "warn"}))
@@ -500,7 +500,7 @@ class EnabledHitsTests(unittest.TestCase):
     def test_look_alike_words_are_not_read_when_off(self) -> None:
         with mock.patch.object(hidden, "mixed_script_words") as words:
             findings = rules.check_unicode(
-                "Log in to pаypal​", "the PR title", policy({"unicode-homoglyphs": "off"})
+                "Log in to p\u0430ypal\u200b", "the PR title", policy({"unicode-homoglyphs": "off"})
             )
         words.assert_not_called()
         self.assertEqual(_titles(findings), [_INVISIBLE])

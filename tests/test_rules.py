@@ -205,9 +205,9 @@ class TrailerGrammarTests(unittest.TestCase):
     is_agent about it. With no identity inputs it matches exactly the lines
     v1 matched with the built-in addresses inside the pattern."""
 
-    _LEADS = ("", " ", "\t", " ", "Thanks ", "> ")
+    _LEADS = ("", " ", "\t", "\u00a0", "Thanks ", "> ")
     _KEYS = ("co-authored-by:", "Co-Authored-By:", "CO-AUTHORED-BY:", "co-authored-by", "coauthored-by:")
-    _GAPS = ("", " ", "\t", " ")
+    _GAPS = ("", " ", "\t", "\u2028")
     _NAMES = ("", "Claude ", "x <y> ", "<", "a<b ", "<noreply@anthropic.com> ")
     _ADDRESSES = (
         "noreply@anthropic.com",
@@ -221,11 +221,11 @@ class TrailerGrammarTests(unittest.TestCase):
         " noreply@anthropic.com",
         "noreply@anthropic.com ",
         "jane@example.com",
-        "noreply@anthropİc.com",
+        "noreply@anthrop\u0130c.com",
         "",
         "noreply@anthropic.com><x",
     )
-    _ENDS = ("", ">", "> ", ">\r", ">\t\r", "> x", ">>", "><noreply@anthropic.com>", "> ")
+    _ENDS = ("", ">", "> ", ">\r", ">\t\r", "> x", ">>", "><noreply@anthropic.com>", ">\u2028")
 
     def _lines(self) -> list[str]:
         return [
@@ -356,13 +356,13 @@ class IdentityListTests(unittest.TestCase):
         added = {"additional-identities": "email:kelvin@example.com\ngithub:kelvin-bot"}
         self.assertTrue(self._flagged("Kelvin@example.com", added))
         # U+212A KELVIN SIGN lowercases to an ASCII k.
-        for address in ("Kelvin@example.com", "Kelvin-bot@users.noreply.github.com",
-                        "kelvin@exаmple.com"):
+        for address in ("\u212aelvin@example.com", "\u212aelvin-bot@users.noreply.github.com",
+                        "kelvin@ex\u0430mple.com"):
             with self.subTest(address=address):
                 self.assertFalse(self._flagged(address, added))
         # The built-in list reads the raw address, as in v1, and an allowed
         # selector cannot exempt a non-ASCII address.
-        turkish = "noreply@anthropİc.com"
+        turkish = "noreply@anthrop\u0130c.com"
         self.assertTrue(self._flagged(turkish, {}))
         self.assertTrue(self._flagged(turkish, {"allowed-identities": "email:noreply@anthropic.com"}))
         self.assertFalse(
