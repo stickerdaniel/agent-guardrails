@@ -70,7 +70,7 @@ Lists take one entry per line:
 
 An `email:` selector matches that address, ignoring ASCII case. A `github:` selector matches the handle's noreply address, with or without its numeric ID, and not a vendor address such as `copilot@github.com`. An unknown input name, an invalid value, a repeated entry, or an address both lists can match fails the run. Input names ignore case, as on GitHub.
 
-Set these values as literals in the workflow on your default branch, never from pull request content such as the title, labels, or branch name. An allowed identity is a matching exception, not authentication: anyone can put any address in a commit. An added extension does not prove the file is that format. A pull request can add files under an excluded path. An explicit `unicode-homoglyphs` or `unicode-unusual-spaces` runs its rule even under `hidden-unicode: off`. No input makes an unreadable file or a reached limit pass.
+Set these values as literals in the workflow on your default branch, never from pull request content such as the title, labels, or branch name. An allowed identity is a matching exception, not authentication: anyone can put any address in a commit. An added extension does not prove the file is that format. A pull request can add files under an excluded path. An explicit `error` or `warn` for `unicode-homoglyphs` or `unicode-unusual-spaces` runs that rule even under `hidden-unicode: off`. No input makes an unreadable file or a reached limit pass.
 
 ## How it works
 
@@ -82,7 +82,7 @@ The workflow and the pinned action come from your default branch. The action fet
 - Added lines are compared with the merge base. A moved file counts as added.
 - A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3`, `wav`, or listed in `additional-binary-extensions`. Those and submodules are logged as unscanned. The PR's `.gitattributes` cannot change this.
 - An invalid UTF-8 path or added line fails, under an excluded path too.
-- The run fails, whatever the inputs, past 64 MiB of Git output, two million output records, 600 seconds of Git, 100 million scan steps, 1,000 findings, or four million characters or 100,000 suspicious characters on one line. What a rule that is off would find counts toward no limit.
+- The run fails, whatever the inputs, past 64 MiB of Git output, two million output records, 600 seconds of Git, 100 million scan steps, 1,000 findings, or four million characters or 100,000 suspicious characters on one line. A rule that is off collects no hits and uses no findings budget; the Git limits, and the scan steps of any rule that is on, still apply.
 
 </details>
 
