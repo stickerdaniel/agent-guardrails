@@ -3,12 +3,15 @@ upstream no-ai-marks tests/test_chars.py at 747c07a, without its helpers."""
 
 from __future__ import annotations
 
+import itertools
 import time
 import tracemalloc
 import unittest
 from unittest import mock
 
-from agent_guardrails import gitdata, rules
+from agent_guardrails import gitdata, hidden, rules
+
+from .support import policy
 
 _INVISIBLE = "Invisible character"
 _PRIVATE_USE = "Private-use character"
@@ -21,8 +24,12 @@ def _tags(text: str) -> str:
     return "".join(chr(0xE0000 + ord(char)) for char in text)
 
 
+def _mode(mode: str) -> rules.Policy:
+    return policy({"hidden-unicode": mode})
+
+
 def _text(text: str, mode: str = "error", where: str = "the PR body") -> list[rules.Finding]:
-    return rules.check_unicode(text, where, mode)
+    return rules.check_unicode(text, where, _mode(mode))
 
 
 def _changed(path: str, kind: str, added=()) -> gitdata.ChangedFile:
@@ -30,7 +37,9 @@ def _changed(path: str, kind: str, added=()) -> gitdata.ChangedFile:
 
 
 def _file_line(line: str, number: int = 3, mode: str = "error") -> list[rules.Finding]:
-    return rules.check_changed_file(_changed("src/app.py", gitdata.TEXT, [(number, line)]), mode)
+    return rules.check_changed_file(
+        _changed("src/app.py", gitdata.TEXT, [(number, line)]), _mode(mode)
+    )
 
 
 def _titles(findings: list[rules.Finding]) -> list[str]:
@@ -172,7 +181,7 @@ class ModeTests(unittest.TestCase):
         for kind, message in cases.items():
             for mode in ("error", "warn"):
                 with self.subTest(kind=kind, mode=mode):
-                    (finding,) = rules.check_changed_file(_changed("notes.md", kind), mode)
+                    (finding,) = rules.check_changed_file(_changed("notes.md", kind), _mode(mode))
                     self.assertEqual((finding.title, finding.severity), (_UNSCANNABLE, "error"))
                     self.assertTrue(finding.message.startswith(message))
                     self.assertEqual(finding.file, "notes.md")
@@ -180,7 +189,7 @@ class ModeTests(unittest.TestCase):
     def test_allowed_binary_and_submodule_yield_nothing(self) -> None:
         for kind in (gitdata.ALLOWED_BINARY, gitdata.SUBMODULE):
             with self.subTest(kind=kind):
-                self.assertEqual(rules.check_changed_file(_changed("logo.png", kind), "error"), [])
+                self.assertEqual(rules.check_changed_file(_changed("logo.png", kind), _mode("error")), [])
 
 
 class LimitTests(unittest.TestCase):
@@ -214,9 +223,9 @@ class LimitTests(unittest.TestCase):
     def test_work_is_counted_across_the_run(self) -> None:
         budget = rules.Budget()
         with mock.patch.object(rules, "WORK_LIMIT", 1000):
-            rules.check_unicode("x" * 600, "the PR title", "error", budget)
+            rules.check_unicode("x" * 600, "the PR title", _mode("error"), budget)
             with self.assertRaisesRegex(rules.LimitReached, "stopped at line 2 of the PR body"):
-                rules.check_unicode("y" * 300 + "\n" + "z" * 300, "the PR body", "error", budget)
+                rules.check_unicode("y" * 300 + "\n" + "z" * 300, "the PR body", _mode("error"), budget)
 
     def test_findings_limit(self) -> None:
         with mock.patch.object(rules, "FINDINGS_LIMIT", 3):
@@ -229,10 +238,12 @@ class LimitTests(unittest.TestCase):
         budget = rules.Budget()
         trailer = "Co-authored-by: Claude <noreply@anthropic.com>\n"
         with mock.patch.object(rules, "FINDINGS_LIMIT", 2):
-            rules.check_body(trailer, budget)
-            rules.check_changed_file(_changed("x.md", gitdata.UNDECODABLE), "warn", budget)
+            rules.check_body(trailer, _mode("error"), budget)
+            rules.check_changed_file(_changed("x.md", gitdata.UNDECODABLE), _mode("warn"), budget)
             with self.assertRaises(rules.LimitReached):
-                rules.check_commit(gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailer), budget)
+                rules.check_commit(
+                    gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailer), _mode("error"), budget
+                )
 
     def _peak(self, line: str, mode: str) -> tuple[rules.LimitReached, int]:
         """The limit a line of a file stops at, and the most memory Python
@@ -298,8 +309,10 @@ class LimitTests(unittest.TestCase):
     def test_findings_of_one_trailer_check_survive_the_limit(self) -> None:
         trailers = "Co-authored-by: Claude <noreply@anthropic.com>\n" * 4
         checks = {
-            "body": lambda: rules.check_body(trailers),
-            "commit": lambda: rules.check_commit(gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailers)),
+            "body": lambda: rules.check_body(trailers, _mode("error")),
+            "commit": lambda: rules.check_commit(
+                gitdata.Commit("a" * 40, "j@x.org", "j@x.org", trailers), _mode("error")
+            ),
         }
         for name, check in checks.items():
             with self.subTest(name), mock.patch.object(rules, "FINDINGS_LIMIT", 3):
@@ -317,6 +330,180 @@ class LimitTests(unittest.TestCase):
         (payload,) = _text("x" + _tags("a" * 100_000))
         self.assertIn("(hidden text: '" + "a" * 200 + "...')", payload.message)
         self.assertLess(len(payload.message), 2000)
+
+
+# One of each: invisible, private-use, unusual space, look-alike word.
+_EVERY_RULE = "a​b prompt 10 km pаypal"
+
+
+class EffectiveModeTests(unittest.TestCase):
+    """hidden-unicode and the two overrides, as the README's table says."""
+
+    # hidden-unicode: the modes of (homoglyphs, unusual spaces) under inherit.
+    _INHERITED = {"error": ("error", "warn"), "warn": ("warn", "warn"), "off": ("off", "off")}
+    _SEVERITY = {"error": "error", "warn": "warning", "off": None}
+
+    def test_every_rule_runs_in_its_effective_mode(self) -> None:
+        overrides = ("inherit", "error", "warn", "off")
+        for hidden_mode, homoglyphs, spaces in itertools.product(self._INHERITED, overrides, overrides):
+            inherited_homoglyphs, inherited_spaces = self._INHERITED[hidden_mode]
+            modes = {
+                _INVISIBLE: hidden_mode,
+                _PRIVATE_USE: hidden_mode,
+                _SPACE: inherited_spaces if spaces == "inherit" else spaces,
+                _LOOKALIKE: inherited_homoglyphs if homoglyphs == "inherit" else homoglyphs,
+            }
+            expected = [
+                (title, self._SEVERITY[mode]) for title, mode in modes.items() if mode != "off"
+            ]
+            given = {
+                "hidden-unicode": hidden_mode,
+                "unicode-homoglyphs": homoglyphs,
+                "unicode-unusual-spaces": spaces,
+            }
+            with self.subTest(**given):
+                checked = policy(given)
+                text = rules.check_unicode(_EVERY_RULE, "the PR body", checked)
+                changed = rules.check_changed_file(
+                    _changed("src/app.py", gitdata.TEXT, [(2, _EVERY_RULE)]), checked
+                )
+                self.assertEqual([(f.title, f.severity) for f in text], expected)
+                self.assertEqual([(f.title, f.severity) for f in changed], expected)
+
+
+class ExclusionTests(unittest.TestCase):
+    _POLICY = policy({"unicode-exclude-paths": "docs/\nexact.md\na/"})
+
+    def test_exclusions_are_literal(self) -> None:
+        cases = {
+            "docs/x.md": True,
+            "docs/sub/y.md": True,
+            "exact.md": True,
+            "a/x": True,
+            "ab/x": False,
+            "docs": False,
+            "docs.md": False,
+            "Docs/x.md": False,
+            "exact.md.bak": False,
+            "sub/exact.md": False,
+            "x/docs/y.md": False,
+        }
+        for path, excluded in cases.items():
+            with self.subTest(path=path):
+                findings = rules.check_changed_file(
+                    _changed(path, gitdata.TEXT, [(1, "a​b")]), self._POLICY
+                )
+                self.assertEqual(_titles(findings), [] if excluded else [_INVISIBLE])
+                self.assertIs(rules.is_excluded(path, self._POLICY), excluded)
+
+    def test_unreadable_files_fail_inside_an_exclusion(self) -> None:
+        for kind, message in (
+            (gitdata.REJECTED_BINARY, "cannot scan docs/x.bin: binary content"),
+            (gitdata.UNDECODABLE, "cannot decode docs/x.bin"),
+        ):
+            with self.subTest(kind=kind):
+                (finding,) = rules.check_changed_file(_changed("docs/x.bin", kind), self._POLICY)
+                self.assertEqual((finding.title, finding.severity), (_UNSCANNABLE, "error"))
+                self.assertTrue(finding.message.startswith(message))
+
+    def test_rejection_names_the_added_formats(self) -> None:
+        (finding,) = rules.check_changed_file(
+            _changed("notes.md", gitdata.REJECTED_BINARY),
+            policy({"additional-binary-extensions": "wasm\navif"}),
+        )
+        self.assertIn(
+            "Only these formats may be binary: avif, gif, gz, ico, jpeg, jpg, mov, mp3, mp4, otf, "
+            "pdf, png, ttf, wasm, wav, webp, woff, woff2, zip.",
+            finding.message,
+        )
+
+
+class AllUnicodeOffTests(unittest.TestCase):
+    _OFF = policy({"hidden-unicode": "off"})
+
+    def test_nothing_is_scanned_or_charged(self) -> None:
+        budget = rules.Budget()
+        with mock.patch.object(rules, "WORK_LIMIT", 0), mock.patch.object(
+            rules, "LINE_LENGTH_LIMIT", 0
+        ), mock.patch.object(hidden, "scan") as scan, mock.patch.object(
+            hidden, "mixed_script_words"
+        ) as words:
+            self.assertEqual(rules.check_unicode(_EVERY_RULE, "the PR body", self._OFF, budget), [])
+            changed = _changed("x.md", gitdata.TEXT, [(1, _EVERY_RULE)])
+            self.assertEqual(rules.check_changed_file(changed, self._OFF, budget), [])
+        scan.assert_not_called()
+        words.assert_not_called()
+
+    def test_unreadable_files_still_fail(self) -> None:
+        for kind in (gitdata.REJECTED_BINARY, gitdata.UNDECODABLE):
+            with self.subTest(kind=kind):
+                (finding,) = rules.check_changed_file(_changed("notes.md", kind), self._OFF)
+                self.assertEqual((finding.title, finding.severity), (_UNSCANNABLE, "error"))
+
+    def test_findings_limit_still_stops_the_run(self) -> None:
+        trailers = "Co-authored-by: Claude <noreply@anthropic.com>\n" * 3
+        with mock.patch.object(rules, "FINDINGS_LIMIT", 2):
+            with self.assertRaisesRegex(rules.LimitReached, "stopped after 2 findings") as caught:
+                rules.check_body(trailers, self._OFF)
+            self.assertEqual(len(caught.exception.findings), 2)
+            budget = rules.Budget()
+            for path in ("a.md", "b.md"):
+                rules.check_changed_file(_changed(path, gitdata.UNDECODABLE), self._OFF, budget)
+            with self.assertRaisesRegex(rules.LimitReached, "stopped after 2 findings"):
+                rules.check_changed_file(_changed("c.md", gitdata.UNDECODABLE), self._OFF, budget)
+
+
+class EnabledHitsTests(unittest.TestCase):
+    """Only the rules that are on keep hits, and only their hits count
+    toward HIT_LIMIT and the findings limit."""
+
+    _SPACES_OFF = policy({"unicode-unusual-spaces": "off"})
+
+    def test_hits_of_a_rule_that_is_off_are_not_collected(self) -> None:
+        line = " " * 5000 + "​" * 3
+        with mock.patch.object(rules, "HIT_LIMIT", 1000):
+            (finding,) = rules.check_unicode(line, "the PR body", self._SPACES_OFF)
+        self.assertEqual(finding.title, _INVISIBLE)
+        self.assertIn("has 3 invisible characters", finding.message)
+
+    def test_hit_limit_counts_hits_of_rules_that_are_on(self) -> None:
+        noise = " " * 2000
+        with mock.patch.object(rules, "HIT_LIMIT", 1000):
+            (finding,) = rules.check_unicode(noise + "\x01" * 1000, "the PR body", self._SPACES_OFF)
+            self.assertIn("has 1000 invisible characters", finding.message)
+            with self.assertRaisesRegex(
+                rules.LimitReached, "more than the 1,000 suspicious characters"
+            ):
+                rules.check_unicode(noise + "\x01" * 1001, "the PR body", self._SPACES_OFF)
+
+    def test_rules_that_are_off_spend_no_findings(self) -> None:
+        off = policy({"unicode-homoglyphs": "off", "unicode-unusual-spaces": "off"})
+        budget = rules.Budget()
+        with mock.patch.object(rules, "FINDINGS_LIMIT", 2):
+            text = "pа " * 5 + "10 km"
+            self.assertEqual(rules.check_unicode(text, "the PR body", off, budget), [])
+            for path in ("a.md", "b.md"):
+                rules.check_changed_file(_changed(path, gitdata.UNDECODABLE), off, budget)
+            with self.assertRaisesRegex(rules.LimitReached, "stopped after 2 findings"):
+                rules.check_changed_file(_changed("c.md", gitdata.REJECTED_BINARY), off, budget)
+
+    def test_findings_before_a_limit_are_kept(self) -> None:
+        text = "pаy​\n" + "\x01" * 1001
+        with mock.patch.object(rules, "HIT_LIMIT", 1000):
+            with self.assertRaises(rules.LimitReached) as caught:
+                rules.check_unicode(text, "the PR body", policy({"unicode-homoglyphs": "warn"}))
+        self.assertEqual(
+            [(f.title, f.severity) for f in caught.exception.findings],
+            [(_INVISIBLE, "error"), (_LOOKALIKE, "warning")],
+        )
+
+    def test_look_alike_words_are_not_read_when_off(self) -> None:
+        with mock.patch.object(hidden, "mixed_script_words") as words:
+            findings = rules.check_unicode(
+                "Log in to pаypal​", "the PR title", policy({"unicode-homoglyphs": "off"})
+            )
+        words.assert_not_called()
+        self.assertEqual(_titles(findings), [_INVISIBLE])
 
 
 if __name__ == "__main__":

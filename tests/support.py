@@ -9,7 +9,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from functools import lru_cache
 from pathlib import Path
+from typing import Mapping
+
+from agent_guardrails import event
+
+from . import yamlsubset
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN_PY = ROOT / "run.py"
@@ -37,6 +43,30 @@ def git_environment(config_count: int) -> set[str]:
     return set(GIT_ENVIRONMENT) | {
         f"GIT_CONFIG_{kind}_{index}" for kind in ("KEY", "VALUE") for index in range(config_count)
     }
+
+
+@lru_cache(maxsize=None)
+def _defaults() -> tuple[tuple[str, str], ...]:
+    inputs = yamlsubset.load((ROOT / "action.yml").read_text(encoding="utf-8"))["inputs"]
+    return tuple((name, spec["default"]) for name, spec in inputs.items())
+
+
+def runner_inputs(given: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The inputs context the runner hands a composite action, as measured
+    on a hosted runner: every key the caller wrote, in its spelling, unknown
+    ones too, then each declared default that no caller key names when case
+    is ignored."""
+    inputs = dict(given or {})
+    written = {name.lower() for name in inputs}
+    for name, default in _defaults():
+        if name.lower() not in written:
+            inputs[name] = default
+    return inputs
+
+
+def policy(given: Mapping[str, str] | None = None) -> event.Policy:
+    """The policy the entrypoint builds for a caller's inputs."""
+    return event._policy(event._inputs({event.INPUTS: json.dumps(runner_inputs(given))}))
 
 # The workflow commands the action writes itself: the mask, and annotations
 # whose properties are escaped, so they hold no raw ":" or ",".
@@ -157,11 +187,14 @@ class Remote:
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
-    def environment(self, event_path: Path, **overrides: str) -> dict[str, str]:
+    def environment(
+        self, event_path: Path, inputs: Mapping[str, str] | None = None, **overrides: str
+    ) -> dict[str, str]:
+        """The step's environment for a caller that wrote these inputs.
+        overrides replace variables, CA_INPUTS included."""
         env = {
             "PATH": os.environ.get("PATH", os.defpath),
-            "CA_REQUIRE_MODEL_ATTRIBUTION": "false",
-            "CA_HIDDEN_UNICODE": "error",
+            "CA_INPUTS": json.dumps(runner_inputs(inputs)),
             "CA_TOKEN": TOKEN,
             "CA_SERVER_URL": self.server_url,
             "CA_REPOSITORY": self.repository,
@@ -172,11 +205,13 @@ class Remote:
         env.update(overrides)
         return env
 
-    def run_action(self, event_path: Path, **overrides: str) -> subprocess.CompletedProcess:
+    def run_action(
+        self, event_path: Path, inputs: Mapping[str, str] | None = None, **overrides: str
+    ) -> subprocess.CompletedProcess:
         """The entrypoint exactly as action.yml starts it."""
         return subprocess.run(
             [sys.executable, "-I", str(RUN_PY)],
-            env=self.environment(event_path, **overrides),
+            env=self.environment(event_path, inputs, **overrides),
             capture_output=True,
             text=True,
             timeout=120,

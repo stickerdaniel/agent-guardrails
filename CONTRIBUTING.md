@@ -21,8 +21,7 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -no-color
 - Runtime or test dependencies. The action is standard-library Python and git.
 - Edits to `agent_guardrails/hidden.py`. It is a verbatim copy of upstream no-ai-marks; update it by copying a newer upstream revision and naming that commit in its header.
 - Changes that check out, import, or run anything from the pull request.
-- Inputs that widen or narrow the identity list per repository, or that turn a check off.
-- Exemptions from the model attribution check beyond `renovate[bot]` and `dependabot[bot]`.
+- Repository policy may set check severities, literal exclusions, and identity or attribution exceptions through validated action inputs; it must come from the trusted default-branch workflow, never from pull-request content, and must not disable fail-closed inspection safeguards.
 
 ## Releasing
 

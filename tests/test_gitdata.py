@@ -254,7 +254,7 @@ class _FakeGitTestCase(RemoteTestCase):
     def _main(self, head: str, mode: str = "warn", **overrides: str) -> tuple[int, str, float]:
         self.remote.open_pull_request(head)
         environ = self.remote.environment(
-            self.remote.event(head=head), CA_HIDDEN_UNICODE=mode, **overrides
+            self.remote.event(head=head), {"hidden-unicode": mode}, **overrides
         )
         stdout = io.StringIO()
         start = time.monotonic()
@@ -785,7 +785,7 @@ class ReaderRecordTests(unittest.TestCase):
             _raw("A", "000000", "100644", b"x.md"),
             _rows(b"diff --git a/x.md b/x.md", b"@@ -0,0 +1,2 @@", b"+clean", b"+more"),
         )
-        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
         self.assertEqual((changed.kind, changed.added), (gitdata.TEXT, ((1, "clean"), (2, "more"))))
 
     def test_truncated_patch_fails(self) -> None:
@@ -795,7 +795,7 @@ class ReaderRecordTests(unittest.TestCase):
                 _rows(b"diff --git a/x.md b/x.md", b"@@ -0,0 +1,2 @@", *last),
             )
             with self.subTest(rows=len(last)), self.assertRaisesRegex(gitdata.GitError, "cannot parse"):
-                gitdata._changed_files(repo, "b" * 40, "h" * 40)
+                gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
 
     def _mode_change(
         self, new_side: bytes, blob: str = _BLOB, old_blob: str | None = None
@@ -807,7 +807,7 @@ class ReaderRecordTests(unittest.TestCase):
             _rows(b"diff --git a/x.md b/x.md", b"old mode 100644", b"new mode 100755"),
             new_side,
         )
-        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
         return changed
 
     def test_content_change_without_a_hunk_fails(self) -> None:
@@ -825,6 +825,7 @@ class ReaderRecordTests(unittest.TestCase):
                 ),
                 "b" * 40,
                 "h" * 40,
+                gitdata.BINARY_EXTENSIONS,
             ),
         }
         for name, read in cases.items():
@@ -839,9 +840,9 @@ class ReaderRecordTests(unittest.TestCase):
             with self.subTest(old_blob=old_blob):
                 if fails:
                     with self.assertRaisesRegex(gitdata.GitError, "cannot parse the diff"):
-                        gitdata._changed_files(repo, "b" * 40, "h" * 40)
+                        gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
                 else:
-                    (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+                    (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
                     self.assertEqual(changed.added, ((1, "new"),))
 
     def _binary_before(self, new_side: bytes) -> gitdata.ChangedFile:
@@ -850,7 +851,7 @@ class ReaderRecordTests(unittest.TestCase):
             _rows(b"diff --git a/x.png b/x.png", b"Binary files a/x.png and b/x.png differ"),
             new_side,
         )
-        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
         return changed
 
     def test_mode_change_reads_the_new_blob_and_adds_nothing(self) -> None:
@@ -899,7 +900,7 @@ class ReaderRecordTests(unittest.TestCase):
             _raw(status, old_mode, "100644", b"x.md", blob),
             _rows(*before, b"diff --git a/x.md b/x.md", *creation),
         )
-        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40)
+        (changed,) = gitdata._changed_files(repo, "b" * 40, "h" * 40, gitdata.BINARY_EXTENSIONS)
         return changed
 
     def test_creation_that_says_nothing_about_a_file_fails(self) -> None:

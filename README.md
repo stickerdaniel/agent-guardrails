@@ -8,7 +8,7 @@ A GitHub Action that checks pull requests for coding agent signatures and hidden
 
 - **Agents signing themselves into your history.** A `Co-authored-by` trailer naming a coding agent, in a commit message or the PR body. Squash merging can carry it into your default branch.
 - **Commits made under an agent's identity.** A commit authored or committed by a coding agent's address, such as `noreply@anthropic.com`.
-- **Text reviewers cannot see.** Zero-width spaces, bidi controls, tag characters, private-use characters, and letters from another script that pass for Latin, in the title, body, commit messages, and added lines. Unusual spaces only warn.
+- **Text reviewers cannot see.** Zero-width spaces, bidi controls, tag characters, private-use characters, and letters from another script that pass for Latin, in the title, body, commit messages, and added lines. Unusual spaces warn by default.
 - **Undisclosed model use (opt-in).** A PR body whose last non-empty line is not `Generated with <model>`, such as `Generated with Claude Opus 5.5`.
 
 ## Usage
@@ -34,14 +34,43 @@ jobs:
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
 
+This example pins v1.0.0, which knows only `require-model-attribution` and `hidden-unicode` with `error` or `warn`, and ignores every other input. The rest of the configuration below needs a v2.0.0 pin.
+
 ## Configuration
+
+From v2.0.0:
 
 | Input | Default | Effect |
 | --- | --- | --- |
 | `require-model-attribution` | `false` | `true` turns on the attribution check. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
-| `hidden-unicode` | `error` | `warn` reports hidden Unicode as warnings instead of failures. |
+| `co-author-trailers` | `error` | `error`, `warn` or `off` for agent trailers in commit messages and the PR body. |
+| `agent-identities` | `error` | `error`, `warn` or `off` for commits authored or committed by an agent's address. |
+| `hidden-unicode` | `error` | `error`, `warn` or `off` for invisible and private-use characters. |
+| `unicode-homoglyphs` | `inherit` | `inherit`, `error`, `warn` or `off` for look-alike letters. `inherit` follows `hidden-unicode`. |
+| `unicode-unusual-spaces` | `inherit` | `inherit`, `error`, `warn` or `off` for unusual spaces. `inherit` warns unless `hidden-unicode` is `off`. |
+| `unicode-exclude-paths` | empty | Paths whose added lines skip the hidden Unicode check. Literal and case-sensitive; a trailing `/` marks a directory. |
+| `allowed-identities` | empty | Addresses that are not agents, as `email:<address>` or `github:<handle>`. |
+| `additional-identities` | empty | Addresses that are agents besides the built-in list, in the same form. |
+| `additional-binary-extensions` | empty | Extensions that may be binary besides the built-in ones, lowercase without a dot. |
+| `additional-attribution-exemptions` | empty | PR author logins exempt from the attribution check, and from nothing else. |
 
-The trailer and identity checks always run. Any other input value fails the run.
+Lists take one entry per line:
+
+```yaml
+        with:
+          unicode-homoglyphs: warn
+          unicode-exclude-paths: |
+            tests/fixtures/unicode/
+            docs/ja.md
+          allowed-identities: |
+            github:Copilot
+          additional-binary-extensions: |
+            wasm
+```
+
+An `email:` selector matches that address, ignoring ASCII case. A `github:` selector matches the handle's noreply address, with or without its numeric ID, and not a vendor address such as `copilot@github.com`. An unknown input name, an invalid value, a repeated entry, or an address both lists can match fails the run. Input names ignore case, as on GitHub.
+
+Set these values as literals in the workflow on your default branch, never from pull request content such as the title, labels, or branch name. An allowed identity is a matching exception, not authentication: anyone can put any address in a commit. An added extension does not prove the file is that format. A pull request can add files under an excluded path. An explicit `unicode-homoglyphs` or `unicode-unusual-spaces` runs its rule even under `hidden-unicode: off`. No input makes an unreadable file or a reached limit pass.
 
 ## How it works
 
@@ -51,9 +80,9 @@ The workflow and the pinned action come from your default branch. The action fet
 <summary>Limits and edge cases</summary>
 
 - Added lines are compared with the merge base. A moved file counts as added.
-- A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3` or `wav`. Those and submodules are logged as unscanned. The PR's `.gitattributes` cannot change this.
-- An invalid UTF-8 path or added line fails.
-- The run fails, even with `hidden-unicode: warn`, past 64 MiB of Git output, two million output records, 600 seconds of Git, 100 million scan steps, 1,000 findings, or four million characters or 100,000 suspicious characters on one line.
+- A binary file fails unless its extension is `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `pdf`, `zip`, `gz`, `woff`, `woff2`, `ttf`, `otf`, `mp4`, `mov`, `mp3`, `wav`, or listed in `additional-binary-extensions`. Those and submodules are logged as unscanned. The PR's `.gitattributes` cannot change this.
+- An invalid UTF-8 path or added line fails, under an excluded path too.
+- The run fails, whatever the inputs, past 64 MiB of Git output, two million output records, 600 seconds of Git, 100 million scan steps, 1,000 findings, or four million characters or 100,000 suspicious characters on one line. What a rule that is off would find counts toward no limit.
 
 </details>
 

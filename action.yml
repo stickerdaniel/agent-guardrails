@@ -7,10 +7,46 @@ inputs:
     description: Require a "Generated with <model>" line as the last non-empty line of the PR body. true or false.
     required: false
     default: "false"
-  hidden-unicode:
-    description: Severity of hidden Unicode findings. error or warn.
+  co-author-trailers:
+    description: Severity of Co-authored-by trailers that name a coding agent, in commit messages and the PR body. error, warn or off.
     required: false
     default: error
+  agent-identities:
+    description: Severity of commits authored or committed by a coding agent's address. error, warn or off.
+    required: false
+    default: error
+  hidden-unicode:
+    description: Severity of invisible and private-use characters, and the mode the two settings below inherit. error, warn or off.
+    required: false
+    default: error
+  unicode-homoglyphs:
+    description: Severity of words that mix Latin with look-alike letters. inherit, error, warn or off.
+    required: false
+    default: inherit
+  unicode-unusual-spaces:
+    description: Severity of unusual spaces. inherit (warn unless hidden-unicode is off), error, warn or off.
+    required: false
+    default: inherit
+  unicode-exclude-paths:
+    description: Repository paths whose added lines the hidden Unicode check skips, one per line. A trailing / marks a directory.
+    required: false
+    default: ""
+  allowed-identities:
+    description: Addresses that are not coding agents, one email:<address> or github:<handle> per line.
+    required: false
+    default: ""
+  additional-identities:
+    description: Addresses that are coding agents besides the built-in ones, one email:<address> or github:<handle> per line.
+    required: false
+    default: ""
+  additional-binary-extensions:
+    description: Extensions that may be binary besides the built-in ones, lowercase without a dot, one per line.
+    required: false
+    default: ""
+  additional-attribution-exemptions:
+    description: PR author logins exempt from the attribution check, one per line.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -18,12 +54,13 @@ runs:
     - name: Run agent guardrails
       shell: bash
       # Composite actions get no INPUT_* variables, so every value the
-      # entrypoint reads is named here. This environment holds the token, so
-      # no git runs in it: run.py checks the git version itself, after it has
-      # masked the credential and in the environment it builds for git.
+      # entrypoint reads is named here. The inputs travel as one JSON map,
+      # which also holds any name the caller wrote that matches no input, so
+      # that the entrypoint can refuse it. This environment holds the token,
+      # so no git runs in it: run.py checks the git version itself, after it
+      # has masked the credential and in the environment it builds for git.
       env:
-        CA_REQUIRE_MODEL_ATTRIBUTION: ${{ inputs.require-model-attribution }}
-        CA_HIDDEN_UNICODE: ${{ inputs.hidden-unicode }}
+        CA_INPUTS: ${{ toJSON(inputs) }}
         CA_TOKEN: ${{ github.token }}
         CA_SERVER_URL: ${{ github.server_url }}
         CA_REPOSITORY: ${{ github.repository }}

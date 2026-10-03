@@ -16,7 +16,7 @@ from pathlib import Path
 from agent_guardrails import event
 
 from . import yamlsubset
-from .support import ROOT, TOKEN, RemoteTestCase, git_environment
+from .support import ROOT, TOKEN, RemoteTestCase, git_environment, runner_inputs
 
 _WORKFLOWS = ROOT / ".github" / "workflows"
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
@@ -38,11 +38,33 @@ class ActionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.action = _load(ROOT / "action.yml")
 
-    def test_declares_exactly_two_inputs_with_safe_defaults(self) -> None:
+    def test_declares_the_inputs_with_literal_safe_defaults(self) -> None:
         inputs = self.action["inputs"]
-        self.assertEqual(set(inputs), {"require-model-attribution", "hidden-unicode"})
-        self.assertEqual(inputs["require-model-attribution"]["default"], "false")
-        self.assertEqual(inputs["hidden-unicode"]["default"], "error")
+        defaults = {name: spec["default"] for name, spec in inputs.items()}
+        self.assertEqual(
+            defaults,
+            {
+                "require-model-attribution": "false",
+                "co-author-trailers": "error",
+                "agent-identities": "error",
+                "hidden-unicode": "error",
+                "unicode-homoglyphs": "inherit",
+                "unicode-unusual-spaces": "inherit",
+                "unicode-exclude-paths": "",
+                "allowed-identities": "",
+                "additional-identities": "",
+                "additional-binary-extensions": "",
+                "additional-attribution-exemptions": "",
+            },
+        )
+        # The entrypoint knows exactly these names.
+        self.assertEqual(tuple(inputs), event.INPUT_NAMES)
+        for name, default in defaults.items():
+            with self.subTest(name=name):
+                # An expression would make the default depend on its caller.
+                self.assertIsInstance(default, str)
+                self.assertNotIn("${{", default)
+                self.assertIs(inputs[name]["required"], False)
 
     def test_names_every_value_the_entrypoint_reads(self) -> None:
         step = _step(self.action)
@@ -50,8 +72,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(
             step["env"],
             {
-                event.REQUIRE_MODEL_ATTRIBUTION: "${{ inputs.require-model-attribution }}",
-                event.HIDDEN_UNICODE: "${{ inputs.hidden-unicode }}",
+                event.INPUTS: "${{ toJSON(inputs) }}",
                 event.TOKEN: "${{ github.token }}",
                 event.SERVER_URL: "${{ github.server_url }}",
                 event.REPOSITORY: "${{ github.repository }}",
@@ -85,7 +106,9 @@ _RECORD = "@@git "
 @unittest.skipUnless(shutil.which("bash") and shutil.which("python3"), "needs bash and python3")
 class CompositeStepTests(RemoteTestCase):
     """Runs the composite step's script the way the runner would, with the
-    expressions in its env block replaced by the caller's values."""
+    expressions in its env block replaced by the caller's values. Of the
+    expression language only the forms action.yml uses are known, and
+    toJSON(inputs) is the map a hosted runner was measured to build."""
 
     def _recorder(self, timeline: Path) -> Path:
         """A directory whose git records each call in timeline."""
@@ -116,7 +139,7 @@ class CompositeStepTests(RemoteTestCase):
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
         self.remote.open_pull_request(head)
         context = {
-            **{f"inputs.{name}": value for name, value in inputs.items()},
+            "toJSON(inputs)": json.dumps(runner_inputs(inputs)),
             "github.token": TOKEN,
             "github.server_url": self.remote.server_url,
             "github.repository": self.remote.repository,
@@ -163,9 +186,25 @@ class CompositeStepTests(RemoteTestCase):
         self.assertEqual(optional.returncode, 0, optional.stdout + optional.stderr)
 
         invalid, _ = self._run_step(
-            {"require-model-attribution": "false", "hidden-unicode": "off"}, body="No line"
+            {"require-model-attribution": "false", "hidden-unicode": "of"}, body="No line"
         )
-        self.assertIn("input hidden-unicode must be error or warn", invalid.stdout)
+        self.assertIn("input hidden-unicode must be error, warn or off", invalid.stdout)
+
+    def test_a_name_in_another_case_is_that_input(self) -> None:
+        # The runner adds no default for a declared name the caller wrote in
+        # another case, so the caller's value is the only one.
+        required, _ = self._run_step({"Require-Model-Attribution": "true"}, body="No line")
+        self.assertEqual(required.returncode, 1, required.stdout + required.stderr)
+        self.assertIn("::error title=PR model attribution required::", required.stdout)
+
+    def test_a_misspelt_input_fails_before_any_git_call(self) -> None:
+        result, events = self._run_step({"require-model-attributionn": "true"}, body="No line")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(
+            "::error title=agent-guardrails::unknown input(s): 'require-model-attributionn'",
+            result.stdout,
+        )
+        self.assertEqual([record for kind, record in events if kind == "git"], [])
 
     def test_no_git_runs_before_the_mask_or_outside_its_environment(self) -> None:
         """The whole step, preflight included: the job token is in the step's
@@ -191,6 +230,23 @@ class CompositeStepTests(RemoteTestCase):
                 self.assertEqual(
                     set(record["env"]) - additions, git_environment(record["config_count"])
                 )
+
+
+class RunnerInputsTests(unittest.TestCase):
+    """The stand-in for toJSON(inputs) builds what runner 2.337.0 built for
+    a composite action: unknown keys and the caller's spelling kept, string
+    values, and a default only for a declared name no key matches."""
+
+    def test_defaults_fill_only_what_the_caller_left_out(self) -> None:
+        inputs = runner_inputs({"Hidden-Unicode": "warn", "typo": "", "co-author-trailers": ""})
+        self.assertEqual(inputs["Hidden-Unicode"], "warn")
+        self.assertNotIn("hidden-unicode", inputs)
+        self.assertEqual(inputs["typo"], "")
+        # An explicit empty value is not replaced by the default.
+        self.assertEqual(inputs["co-author-trailers"], "")
+        self.assertEqual(inputs["require-model-attribution"], "false")
+        self.assertEqual(len(inputs), len(event.INPUT_NAMES) + 1)
+        self.assertTrue(all(isinstance(value, str) for value in inputs.values()))
 
 
 class DogfoodCallerTests(unittest.TestCase):

@@ -64,30 +64,30 @@ def _inspect(
 ) -> gitdata.PullRequest:
     """Run every check, adding to findings as it goes. Raises GitError or
     LimitReached when the pull request cannot be checked to the end."""
-    mode = settings.hidden_unicode
+    policy = settings.policy
     budget = rules.Budget()
-    findings += rules.check_body(settings.body, budget)
-    findings += rules.check_attribution(
-        settings.body, settings.login, settings.require_model_attribution
-    )
-    findings += rules.check_unicode(settings.title, "the PR title", mode, budget)
+    findings += rules.check_body(settings.body, policy, budget)
+    findings += rules.check_attribution(settings.body, settings.login, policy)
+    findings += rules.check_unicode(settings.title, "the PR title", policy, budget)
     # The raw body, Macroscope block included: all of it can reach the squash
     # commit message.
-    findings += rules.check_unicode(settings.body, "the PR body", mode, budget)
+    findings += rules.check_unicode(settings.body, "the PR body", policy, budget)
 
     credential = gitdata.encode_credential(settings.token)
     out.mask(credential)
     pull_request = gitdata.fetch_pull_request(settings, credential, out.log)
 
     for commit in pull_request.commits:
-        findings += rules.check_commit(commit, budget)
+        findings += rules.check_commit(commit, policy, budget)
         findings += rules.check_unicode(
-            commit.message, f"the message of commit {commit.sha}", mode, budget
+            commit.message, f"the message of commit {commit.sha}", policy, budget
         )
     for changed in pull_request.files:
         if changed.kind == gitdata.ALLOWED_BINARY:
             out.log(f"not scanned (binary): {changed.path}")
         elif changed.kind == gitdata.SUBMODULE:
             out.log(f"not scanned (submodule): {changed.path}")
-        findings += rules.check_changed_file(changed, mode, budget)
+        elif changed.kind == gitdata.TEXT and rules.is_excluded(changed.path, policy):
+            out.log(f"not scanned (excluded): {changed.path}")
+        findings += rules.check_changed_file(changed, policy, budget)
     return pull_request

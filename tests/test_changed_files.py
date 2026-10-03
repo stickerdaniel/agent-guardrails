@@ -193,7 +193,7 @@ class DriverTests(_ChangedFileTestCase):
         mode = event_fields.pop("mode", "error")
         self.remote.open_pull_request(head)
         result = self.remote.run_action(
-            self.remote.event(head=head, **event_fields), CA_HIDDEN_UNICODE=mode
+            self.remote.event(head=head, **event_fields), {"hidden-unicode": mode}
         )
         self.assertEqual(foreign_commands(result.stdout), [])
         return result
@@ -426,6 +426,138 @@ class DriverTests(_ChangedFileTestCase):
                 self.assertIn("not fully checked: stopped after 1000 findings", result.stdout)
 
 
+class PolicyDriverTests(_ChangedFileTestCase):
+    """Exclusions, added binary formats, and every Unicode rule off, through
+    the entrypoint exactly as action.yml starts it."""
+
+    def _run(self, head: str, inputs: dict[str, str], **event_fields):
+        self.remote.open_pull_request(head)
+        result = self.remote.run_action(self.remote.event(head=head, **event_fields), inputs)
+        self.assertEqual(foreign_commands(result.stdout), [])
+        return result
+
+    def test_excluded_file_is_logged_and_not_scanned(self) -> None:
+        head = self.remote.commit(
+            "Add", files={"fixtures/x.md": f"a{_ZWSP}b\n", "src/y.md": "clean\n"}
+        )
+        result = self._run(head, {"unicode-exclude-paths": "fixtures/"})
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("agent-guardrails: not scanned (excluded): fixtures/x.md\n", result.stdout)
+        self.assertNotIn("Invisible character", result.stdout)
+        self.assertIn("checked 1 commit, 2 changed files", result.stdout)
+
+    def test_exclusions_leave_title_body_and_messages_alone(self) -> None:
+        head = self.remote.commit(f"Add{_ZWSP} x", files={"x.md": f"a{_ZWSP}b\n"})
+        result = self._run(
+            head, {"unicode-exclude-paths": "x.md"}, title=f"Fix{_ZWSP}", body=f"Do{_ZWSP}ne"
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(result.stdout.count("::error title=Invisible character::"), 3)
+        for where in ("The PR title", "The PR body", f"The message of commit {head}"):
+            self.assertIn(f"::error title=Invisible character::{where} has 1", result.stdout)
+        self.assertNotIn("file=x.md", result.stdout)
+
+    def test_a_move_is_judged_at_its_new_path(self) -> None:
+        self.new_base(**{"fixtures/a.md": f"a{_ZWSP}b\n", "src/b.md": f"c{_ZWSP}d\n"})
+        self.remote.git("mv", "fixtures/a.md", "src/a.md")
+        self.remote.git("mv", "src/b.md", "fixtures/b.md")
+        head = self.remote.commit("Move")
+        result = self._run(head, {"unicode-exclude-paths": "fixtures/"})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("::error file=src/a.md,line=1,title=Invisible character::", result.stdout)
+        self.assertIn("agent-guardrails: not scanned (excluded): fixtures/b.md\n", result.stdout)
+        self.assertNotIn("file=fixtures/b.md", result.stdout)
+
+    def test_unreadable_files_fail_inside_an_exclusion(self) -> None:
+        head = self.remote.commit(
+            "Add", files={"fixtures/latin1.txt": b"caf\xe9\n", "fixtures/notes.md": b"a\0b\n"}
+        )
+        for hidden_unicode in ("error", "off"):
+            with self.subTest(hidden_unicode=hidden_unicode):
+                result = self._run(
+                    head, {"unicode-exclude-paths": "fixtures/", "hidden-unicode": hidden_unicode}
+                )
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(
+                    "::error file=fixtures/latin1.txt,title=Cannot scan a changed file::"
+                    "cannot decode fixtures/latin1.txt",
+                    result.stdout,
+                )
+                self.assertIn(
+                    "::error file=fixtures/notes.md,title=Cannot scan a changed file::"
+                    "cannot scan fixtures/notes.md: binary content.",
+                    result.stdout,
+                )
+                self.assertNotIn("not scanned (excluded)", result.stdout)
+
+    def test_an_undecodable_name_fails_inside_an_exclusion(self) -> None:
+        # The invalid name decodes for display to the same U+FFFD that the
+        # valid name holds; only the valid one is excluded.
+        blob = self.remote.git("hash-object", "-w", "--stdin", stdin="clean\n")
+        self.remote.git("update-index", "--add", "--cacheinfo", f"100644,{blob},fixtures/bad\udcff.txt")
+        head = self.remote.commit("Add", files={"fixtures/ok�.txt": f"a{_ZWSP}b\n"})
+        for hidden_unicode in ("error", "off"):
+            with self.subTest(hidden_unicode=hidden_unicode):
+                result = self._run(
+                    head, {"unicode-exclude-paths": "fixtures/", "hidden-unicode": hidden_unicode}
+                )
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(
+                    "title=Cannot scan a changed file::cannot decode fixtures/bad�.txt",
+                    result.stdout,
+                )
+                self.assertIn(
+                    "agent-guardrails: not scanned (excluded): fixtures/ok�.txt\n", result.stdout
+                )
+                self.assertNotIn("Invisible character", result.stdout)
+
+    def test_added_binary_format(self) -> None:
+        wasm = b"\0asm\1\0\0\0"
+        head = self.remote.commit("Add", files={"x.wasm": wasm, "y.wasm": f"a{_ZWSP}b\n"})
+        allowed = self._run(head, {"additional-binary-extensions": "wasm"})
+        self.assertEqual(allowed.returncode, 1, allowed.stdout)
+        self.assertIn("agent-guardrails: not scanned (binary): x.wasm\n", allowed.stdout)
+        self.assertNotIn("file=x.wasm", allowed.stdout)
+        # Text is scanned whatever its extension.
+        self.assertIn("::error file=y.wasm,line=1,title=Invisible character::", allowed.stdout)
+
+        refused = self._run(head, {})
+        self.assertIn("cannot scan x.wasm: binary content", refused.stdout)
+
+    def test_rejection_names_the_added_formats(self) -> None:
+        head = self.remote.commit("Add", files={"x.wasm": b"\0asm", "notes.md": b"a\0b\n"})
+        result = self._run(head, {"additional-binary-extensions": "wasm"})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("cannot scan notes.md: binary content.", result.stdout)
+        self.assertIn("ttf, wasm, wav", result.stdout)
+
+    def test_every_unicode_rule_off(self) -> None:
+        line = "a​b prompt 10 km pаypal"
+        head = self.remote.commit(f"Add {line}", files={"x.md": f"{line}\n"})
+        result = self._run(head, {"hidden-unicode": "off"}, title=line, body=line)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("0 errors, 0 warnings", result.stdout)
+
+        unreadable = self.remote.commit("More", files={"latin1.txt": b"caf\xe9\n", "notes.md": b"a\0b"})
+        result = self._run(unreadable, {"hidden-unicode": "off"})
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("cannot decode latin1.txt", result.stdout)
+        self.assertIn("cannot scan notes.md: binary content", result.stdout)
+        self.assertIn("2 errors, 0 warnings", result.stdout)
+
+    def test_git_output_limit_holds_with_every_unicode_rule_off(self) -> None:
+        head = self.remote.commit("Add data", files={"data.txt": "line\n" * 300_000})
+        self.remote.open_pull_request(head)
+        stdout = io.StringIO()
+        environ = self.remote.environment(self.remote.event(head=head), {"hidden-unicode": "off"})
+        with mock.patch.object(gitdata, "OUTPUT_LIMIT", 2**20):
+            self.assertEqual(main(environ, stdout=stdout), 1, stdout.getvalue())
+        self.assertIn(
+            "::error title=agent-guardrails::not fully checked: git printed more than 1 MiB",
+            stdout.getvalue(),
+        )
+
+
 class InspectionLimitTests(_ChangedFileTestCase):
     """What a line may hold in memory while it is checked is bounded before
     it is taken, and running out fails the run in warn mode too."""
@@ -433,7 +565,7 @@ class InspectionLimitTests(_ChangedFileTestCase):
     def _main(self, head: str) -> str:
         self.remote.open_pull_request(head)
         stdout = io.StringIO()
-        environ = self.remote.environment(self.remote.event(head=head), CA_HIDDEN_UNICODE="warn")
+        environ = self.remote.environment(self.remote.event(head=head), {"hidden-unicode": "warn"})
         self.assertEqual(main(environ, stdout=stdout), 1, stdout.getvalue())
         self.assertEqual(foreign_commands(stdout.getvalue()), [])
         return stdout.getvalue()

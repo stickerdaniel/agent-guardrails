@@ -101,7 +101,8 @@ SUBMODULE = "submodule"
 
 # Formats that are binary by nature. Git calls a file binary when it holds a
 # NUL byte, which any text file can be made to hold, so a binary file with any
-# other extension cannot be scanned and fails the check.
+# other extension cannot be scanned and fails the check. A caller can add
+# extensions; _read joins them to these once.
 BINARY_EXTENSIONS = frozenset({
     "png", "jpg", "jpeg", "gif", "webp", "ico", "pdf", "zip", "gz",
     "woff", "woff2", "ttf", "otf", "mp4", "mov", "mp3", "wav",
@@ -385,6 +386,7 @@ def _require_git(repo: _Repository, log: Callable[[str], None]) -> None:
 
 
 def _read(repo: _Repository, settings: Settings) -> PullRequest:
+    extensions = BINARY_EXTENSIONS | settings.policy.additional_binary_extensions
     repo.git("init", "--bare", "--quiet", "--template=")
 
     # Run inside the fresh repository: there is no reflog for @{-N} to expand.
@@ -428,7 +430,7 @@ def _read(repo: _Repository, settings: Settings) -> PullRequest:
         raise GitError("git log and git rev-list disagree about the commits to check")
     diff_base = merge_base.stdout.decode().strip()
     # The pull request is not blamed for what its base branch added.
-    files = _changed_files(repo, diff_base, settings.head_sha)
+    files = _changed_files(repo, diff_base, settings.head_sha, extensions)
     return PullRequest(commits, diff_base, files)
 
 
@@ -462,11 +464,14 @@ def _commits(repo: _Repository, revision_range: str) -> list[Commit]:
     return commits
 
 
-def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]:
+def _changed_files(
+    repo: _Repository, base: str, head: str, extensions: frozenset[str]
+) -> list[ChangedFile]:
     """Every added or changed file with its added lines. The raw listing
     names each file, its status, its modes and its new blob exactly; the patch
     supplies the lines. A type change prints as a deletion followed by a
-    creation, so it owns two sections of the patch."""
+    creation, so it owns two sections of the patch. extensions are the
+    formats that may be binary."""
     entries = _raw_entries(
         repo.charge(repo.git(*_DIFF, "--raw", "-z", "--no-abbrev", base, head, "--"))
     )
@@ -517,7 +522,9 @@ def _changed_files(repo: _Repository, base: str, head: str) -> list[ChangedFile]
         ):
             raise GitError(_UNPARSABLE)
         files.append(
-            _classify(path, status, old_mode, new_mode, group[-1], partial(new_side, blob))
+            _classify(
+                path, status, old_mode, new_mode, group[-1], partial(new_side, blob), extensions
+            )
         )
     if index != len(sections):
         raise GitError(_UNPARSABLE)
@@ -682,6 +689,7 @@ def _classify(
     new_mode: str,
     section: _Section,
     read_new_side: Callable[[], _Section],
+    extensions: frozenset[str],
 ) -> ChangedFile:
     """What the new side of a file is. section is the file's own section, or
     a type change's creation, whose old side is empty."""
@@ -703,7 +711,7 @@ def _classify(
         section = read_new_side()
     if section.binary:
         extension = posixpath.splitext(path)[1][1:].lower()
-        kind = ALLOWED_BINARY if extension in BINARY_EXTENSIONS else REJECTED_BINARY
+        kind = ALLOWED_BINARY if extension in extensions else REJECTED_BINARY
         return ChangedFile(path, status, old_mode, new_mode, kind)
     try:
         added = tuple(

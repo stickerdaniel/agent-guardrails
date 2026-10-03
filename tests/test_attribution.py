@@ -13,7 +13,7 @@ import unittest
 from agent_guardrails import attribution, rules
 from agent_guardrails.report import Reporter
 
-from .support import ROOT
+from .support import ROOT, policy
 
 _TEMPLATE = ROOT / ".github" / "pull_request_template.md"
 
@@ -206,7 +206,9 @@ class TemplateTests(unittest.TestCase):
 class AnnotationTests(unittest.TestCase):
     def test_failure_emits_actionable_github_annotation(self) -> None:
         stream = io.StringIO()
-        findings = rules.check_attribution("No attribution", "jane", required=True)
+        findings = rules.check_attribution(
+            "No attribution", "jane", policy({"require-model-attribution": "true"})
+        )
         for finding in findings:
             Reporter(stream).finding(finding)
 

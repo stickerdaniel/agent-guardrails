@@ -24,7 +24,7 @@ class CleanPullRequestTests(RemoteTestCase):
 
         result = self.remote.run_action(
             self.remote.event(head=head, body=_ATTRIBUTION),
-            CA_REQUIRE_MODEL_ATTRIBUTION="true",
+            {"require-model-attribution": "true"},
         )
 
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -66,9 +66,9 @@ class CleanPullRequestTests(RemoteTestCase):
 
 
 class RuleTests(RemoteTestCase):
-    def _run(self, head: str, body: str = "", **overrides: str):
+    def _run(self, head: str, body: str = "", inputs: dict[str, str] | None = None, **overrides: str):
         self.remote.open_pull_request(head)
-        return self.remote.run_action(self.remote.event(head=head, body=body), **overrides)
+        return self.remote.run_action(self.remote.event(head=head, body=body), inputs, **overrides)
 
     def test_empty_commit_with_bot_trailer_fails(self) -> None:
         head = self.remote.commit("Empty\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
@@ -113,15 +113,47 @@ class RuleTests(RemoteTestCase):
     def test_reads_event_path_from_environment(self) -> None:
         """A null body read through GITHUB_EVENT_PATH fails only when required."""
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
-        required = self._run(head, body=None, CA_REQUIRE_MODEL_ATTRIBUTION="true")
-        optional = self._run(head, body=None, CA_REQUIRE_MODEL_ATTRIBUTION="false")
+        required = self._run(head, body=None, inputs={"require-model-attribution": "true"})
+        optional = self._run(head, body=None, inputs={"require-model-attribution": "false"})
         self.assertEqual(required.returncode, 1)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
         self.assertEqual(optional.returncode, 0, optional.stdout)
 
     def test_hidden_unicode_warn_is_accepted(self) -> None:
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
-        self.assertEqual(self._run(head, CA_HIDDEN_UNICODE="warn").returncode, 0)
+        self.assertEqual(self._run(head, inputs={"hidden-unicode": "warn"}).returncode, 0)
+
+    def test_warnings_alone_pass_and_an_error_fails(self) -> None:
+        head = self.remote.commit(
+            "Add x\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
+            files={"x.txt": "x\n"},
+            GIT_AUTHOR_EMAIL=CLAUDE,
+        )
+        warned = self._run(head, inputs={"co-author-trailers": "warn", "agent-identities": "warn"})
+        self.assertEqual(warned.returncode, 0, warned.stdout)
+        self.assertIn("::warning title=Bot co-author trailer in a commit::", warned.stdout)
+        self.assertIn("::warning title=Bot commit author::", warned.stdout)
+        self.assertIn("0 errors, 2 warnings", warned.stdout)
+
+        failed = self._run(head, inputs={"co-author-trailers": "warn"})
+        self.assertEqual(failed.returncode, 1, failed.stdout)
+        self.assertIn("::error title=Bot commit author::", failed.stdout)
+        self.assertIn("1 error, 1 warning", failed.stdout)
+
+        quiet = self._run(head, inputs={"co-author-trailers": "off", "agent-identities": "off"})
+        self.assertEqual(quiet.returncode, 0, quiet.stdout)
+        self.assertIn("0 errors, 0 warnings", quiet.stdout)
+
+    def test_allowed_identity_passes(self) -> None:
+        copilot = "198982749+Copilot@users.noreply.github.com"
+        head = self.remote.commit(
+            f"Add x\n\nCo-authored-by: Copilot <{copilot}>\n",
+            files={"x.txt": "x\n"},
+            GIT_AUTHOR_EMAIL=copilot,
+        )
+        self.assertEqual(self._run(head).returncode, 1)
+        allowed = self._run(head, inputs={"allowed-identities": "github:Copilot"})
+        self.assertEqual(allowed.returncode, 0, allowed.stdout)
 
 
 class FailClosedTests(RemoteTestCase):
@@ -220,12 +252,27 @@ class FailClosedTests(RemoteTestCase):
         event = self.remote.event(head=head)
         self._fails_with(
             "input require-model-attribution must be true or false",
-            self.remote.run_action(event, CA_REQUIRE_MODEL_ATTRIBUTION="yes"),
+            self.remote.run_action(event, {"require-model-attribution": "yes"}),
         )
         self._fails_with(
-            "input hidden-unicode must be error or warn",
-            self.remote.run_action(event, CA_HIDDEN_UNICODE="off"),
+            "input hidden-unicode must be error, warn or off",
+            self.remote.run_action(event, {"hidden-unicode": "of"}),
         )
+
+    def test_unknown_input_fails_cleanly_before_git(self) -> None:
+        """Also the import smoke test: run.py under -I reaches the input
+        check, and nothing but its annotation is printed."""
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        self.remote.open_pull_request(head)
+        result = self.remote.run_action(
+            self.remote.event(head=head), {"require-model-attributionn": "true"}
+        )
+        self._fails_with(
+            "::error title=agent-guardrails::unknown input(s): 'require-model-attributionn'\n", result
+        )
+        self.assertEqual(result.stderr, "")
+        self.assertNotIn("git version", result.stdout)
+        self.assertNotIn("::add-mask::", result.stdout)
 
 
 if __name__ == "__main__":

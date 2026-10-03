@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from . import gitdata, hidden
 from .attribution import _ERROR as ATTRIBUTION_ERROR
 from .attribution import has_model_attribution
+from .event import Policy, selects
 from .gitdata import ChangedFile, Commit
 
 # Bare identities, matched against a trailer address and against the
@@ -32,13 +33,14 @@ _IDENTITY_RE = re.compile(AI_IDENTITY, re.IGNORECASE)
 # absorbs it the way [[:space:]]* did under grep. One \s where grep had
 # [[:space:]]+: .* takes the rest of the run, and a line holds no LF, so the
 # lines that match are the same, while \s+ followed by .* would try every
-# split of a long run of spaces and take quadratic time.
-_TRAILER_RE = re.compile(
-    r"\s*co-authored-by:\s.*<" + AI_IDENTITY + r">\s*", re.IGNORECASE
-)
+# split of a long run of spaces and take quadratic time. The address is the
+# last bracketed one, captured raw for is_agent: no built-in address holds a
+# bracket or ends in a space, so this matches the lines that embedding
+# AI_IDENTITY between the brackets matched.
+_TRAILER_RE = re.compile(r"\s*co-authored-by:\s.*<([^<>]*)>\s*", re.IGNORECASE)
 
 # Dependency bots write no model output, so they owe no attribution line. They
-# are exempt from nothing else.
+# are exempt from nothing else. The logins a caller adds are exempt the same way.
 EXEMPT_FROM_ATTRIBUTION = frozenset({"renovate[bot]", "dependabot[bot]"})
 
 # The annotation title of each hidden Unicode rule.
@@ -53,9 +55,10 @@ _NOUNS = {
     "private-use": "private-use character",
     "unusual-space": "unusual space",
 }
-# Unusual spaces are common in pasted prose, so they only warn. Every other
-# rule is an error unless the caller chose warn.
-_WARNING_RULES = frozenset({"unusual-space"})
+# The rules the vendored scanner reports; look-alike words have their own.
+_SCANNED_RULES = tuple(_NOUNS)
+# The severity of each mode that runs; off runs nothing.
+_SEVERITIES = {"error": "error", "warn": "warning"}
 _UNSCANNABLE = "Cannot scan a changed file"
 
 # What one run may spend on the checks. A unit is one code point that the
@@ -138,65 +141,85 @@ class Finding:
     line: int | None = None
 
 
-def bot_trailers(text: str) -> list[str]:
-    """Lines of text that are Co-Authored-By trailers naming a coding agent."""
-    return [line for line in text.split("\n") if _TRAILER_RE.fullmatch(line)]
-
-
-def is_bot_identity(address: str) -> bool:
+def is_agent(address: str, policy: Policy) -> bool:
+    """Whether an address is a coding agent's: built in or added by the
+    caller, and not allowed by the caller. The built-in list sees the raw
+    address, as it always has."""
+    if any(selects(selector, address) for selector in policy.allowed_identities):
+        return False
+    if any(selects(selector, address) for selector in policy.additional_identities):
+        return True
     return _IDENTITY_RE.fullmatch(address) is not None
 
 
-def check_commit(commit: Commit, budget: Budget | None = None) -> list[Finding]:
+def bot_trailers(text: str, policy: Policy) -> list[str]:
+    """Lines of text that are Co-Authored-By trailers naming a coding agent."""
+    trailers = []
+    for line in text.split("\n"):
+        match = _TRAILER_RE.fullmatch(line)
+        if match and is_agent(match[1], policy):
+            trailers.append(line)
+    return trailers
+
+
+def check_commit(commit: Commit, policy: Policy, budget: Budget | None = None) -> list[Finding]:
     """Behaviours 1 and 2: a trailer in the message, an agent as author or
-    committer. Squash merging can carry these trailers into the merge commit."""
+    committer. Squash merging can carry these trailers into the merge commit.
+    Each has its own mode, and one that is off leaves the other running."""
     budget = Budget() if budget is None else budget
     findings: list[Finding] = []
     try:
-        for line in bot_trailers(commit.message):
-            budget.found()
-            findings.append(
-                Finding(
-                    "Bot co-author trailer in a commit",
-                    f"Commit {commit.sha} contains a bot Co-Authored-By line: "
-                    f"{_quote(line.strip())}. Reword the commit with git rebase -i and "
-                    "remove the line.",
-                )
-            )
-        for role, address in (
-            ("authored", commit.author_email),
-            ("committed", commit.committer_email),
-        ):
-            if is_bot_identity(address):
+        if policy.co_author_trailers != "off":
+            for line in bot_trailers(commit.message, policy):
                 budget.found()
                 findings.append(
                     Finding(
-                        "Bot commit author",
-                        f"Commit {commit.sha} is {role} by a coding agent: {address}. "
-                        "Rewrite it with git commit --amend --reset-author --no-edit, "
-                        "which makes you its author and committer.",
+                        "Bot co-author trailer in a commit",
+                        f"Commit {commit.sha} contains a bot Co-Authored-By line: "
+                        f"{_quote(line.strip())}. Reword the commit with git rebase -i and "
+                        "remove the line.",
+                        _SEVERITIES[policy.co_author_trailers],
                     )
                 )
+        if policy.agent_identities != "off":
+            for role, address in (
+                ("authored", commit.author_email),
+                ("committed", commit.committer_email),
+            ):
+                if is_agent(address, policy):
+                    budget.found()
+                    findings.append(
+                        Finding(
+                            "Bot commit author",
+                            f"Commit {commit.sha} is {role} by a coding agent: {address}. "
+                            "Rewrite it with git commit --amend --reset-author --no-edit, "
+                            "which makes you its author and committer.",
+                            _SEVERITIES[policy.agent_identities],
+                        )
+                    )
     except LimitReached as error:
         error.findings = findings + error.findings
         raise
     return findings
 
 
-def check_body(body: str | None, budget: Budget | None = None) -> list[Finding]:
+def check_body(body: str | None, policy: Policy, budget: Budget | None = None) -> list[Finding]:
     """Behaviour 3. The body can become the squash commit message, so a
     trailer there reaches the default branch like one in a commit. Reads the
     raw body: a Macroscope block lands in that commit message too."""
     budget = Budget() if budget is None else budget
+    if policy.co_author_trailers == "off":
+        return []
     findings: list[Finding] = []
     try:
-        for line in bot_trailers(body or ""):
+        for line in bot_trailers(body or "", policy):
             budget.found()
             findings.append(
                 Finding(
                     "Bot co-author trailer in the PR body",
                     f"The PR body contains a bot Co-Authored-By line: {_quote(line.strip())}. "
                     "Edit the PR description and remove it.",
+                    _SEVERITIES[policy.co_author_trailers],
                 )
             )
     except LimitReached as error:
@@ -205,9 +228,11 @@ def check_body(body: str | None, budget: Budget | None = None) -> list[Finding]:
     return findings
 
 
-def check_attribution(body: str | None, login: str, required: bool) -> list[Finding]:
+def check_attribution(body: str | None, login: str, policy: Policy) -> list[Finding]:
     """Behaviour 4, only where the caller asks for it."""
-    if not required or login in EXEMPT_FROM_ATTRIBUTION:
+    if not policy.require_model_attribution:
+        return []
+    if login in EXEMPT_FROM_ATTRIBUTION or login in policy.additional_attribution_exemptions:
         return []
     if has_model_attribution(body):
         return []
@@ -215,33 +240,45 @@ def check_attribution(body: str | None, login: str, required: bool) -> list[Find
 
 
 def check_unicode(
-    text: str | None, where: str, mode: str, budget: Budget | None = None
+    text: str | None, where: str, policy: Policy, budget: Budget | None = None
 ) -> list[Finding]:
     """Behaviour 5 for the title, the raw body, or a commit message, line by
     line. None of them is a file, so a BOM is never at a file's start there.
-    where names the text, such as "the PR body"."""
+    where names the text, such as "the PR body". Exclusions never apply."""
     budget = Budget() if budget is None else budget
     lines = (text or "").split("\n")
     findings: list[Finding] = []
     try:
         for number, line in enumerate(lines, 1):
             label = where if len(lines) == 1 else f"line {number} of {where}"
-            findings += _unicode_line(line.rstrip("\r"), label, mode, budget)
+            findings += _unicode_line(line.rstrip("\r"), label, policy, budget)
     except LimitReached as error:
         error.findings = findings + error.findings
         raise
     return findings
 
 
+def is_excluded(path: str, policy: Policy) -> bool:
+    """Whether the caller excluded a path from the hidden Unicode check: an
+    entry names it exactly, or ends in a slash and starts it. Literal and
+    case-sensitive."""
+    return any(
+        path == entry or (entry.endswith("/") and path.startswith(entry))
+        for entry in policy.exclude_paths
+    )
+
+
 def check_changed_file(
-    changed: ChangedFile, mode: str, budget: Budget | None = None
+    changed: ChangedFile, policy: Policy, budget: Budget | None = None
 ) -> list[Finding]:
     """Behaviour 5 for the added lines of one file. A file that cannot be
-    read fails whatever the mode, because unread is not clean."""
+    read fails whatever the mode and wherever it is, because unread is not
+    clean. Only then do exclusions and modes apply."""
     budget = Budget() if budget is None else budget
     if changed.kind == gitdata.REJECTED_BINARY:
         budget.found()
-        formats = ", ".join(sorted(gitdata.BINARY_EXTENSIONS))
+        extensions = gitdata.BINARY_EXTENSIONS | policy.additional_binary_extensions
+        formats = ", ".join(sorted(extensions))
         return [
             Finding(
                 _UNSCANNABLE,
@@ -261,13 +298,15 @@ def check_changed_file(
                 file=changed.path,
             )
         ]
+    if is_excluded(changed.path, policy):
+        return []
     findings: list[Finding] = []
     try:
         for number, line in changed.added:
             findings += _unicode_line(
                 line,
                 f"line {number} of {changed.path}",
-                mode,
+                policy,
                 budget,
                 at_file_start=number == 1,
                 file=changed.path,
@@ -290,38 +329,59 @@ def _names(code_points) -> str:
     return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
 
 
+def _mode(rule: str, policy: Policy) -> str | None:
+    """The mode a hidden Unicode rule runs in, or None when it is off."""
+    mode = {
+        "invisible-char": policy.hidden_unicode,
+        "private-use": policy.hidden_unicode,
+        "unusual-space": policy.unicode_unusual_spaces,
+        "homoglyph": policy.unicode_homoglyphs,
+    }[rule]
+    return None if mode == "off" else mode
+
+
 def _unicode_line(
     line: str,
     where: str,
-    mode: str,
+    policy: Policy,
     budget: Budget,
     *,
     at_file_start: bool = False,
     file: str | None = None,
     number: int | None = None,
 ) -> list[Finding]:
-    """One finding per rule that a line breaks, as upstream groups them."""
+    """One finding per rule that a line breaks, as upstream groups them.
+    With every rule off the line is not scanned and costs nothing."""
+    modes = {rule: _mode(rule, policy) for rule in _UNICODE_TITLES}
+    if not any(modes.values()):
+        return []
     budget.spend(line, where)
 
     def finding(rule: str, message: str, column: int) -> Finding:
         budget.found()
-        severity = "warning" if mode == "warn" or rule in _WARNING_RULES else "error"
         text = (
             f"{where[0].upper()}{where[1:]} {message}; the line reads: "
             f"{hidden.snippet(line, column)}"
         )
-        return Finding(_UNICODE_TITLES[rule], text, severity, file, number)
+        return Finding(_UNICODE_TITLES[rule], text, _SEVERITIES[modes[rule]], file, number)
 
+    # Only a rule that is on keeps its hits, and only those count toward
+    # HIT_LIMIT, so a line full of what is off neither stops the run nor
+    # takes the memory.
     hits: dict[str, list[tuple[int, int]]] = {}
-    scanned = hidden.scan(line, at_file_start=at_file_start)
-    for seen, (rule, column, code_point) in enumerate(scanned, 1):
-        if seen > HIT_LIMIT:
-            raise LimitReached(
-                f"not fully checked: the hidden Unicode check stopped at {where}, which has "
-                f"more than the {HIT_LIMIT:,} suspicious characters this action collects "
-                "in one line"
-            )
-        hits.setdefault(rule, []).append((column, code_point))
+    if any(modes[rule] for rule in _SCANNED_RULES):
+        seen = 0
+        for rule, column, code_point in hidden.scan(line, at_file_start=at_file_start):
+            if modes[rule] is None:
+                continue
+            seen += 1
+            if seen > HIT_LIMIT:
+                raise LimitReached(
+                    f"not fully checked: the hidden Unicode check stopped at {where}, which has "
+                    f"more than the {HIT_LIMIT:,} suspicious characters this action collects "
+                    "in one line"
+                )
+            hits.setdefault(rule, []).append((column, code_point))
     findings: list[Finding] = []
     try:
         for rule, found in hits.items():
@@ -336,14 +396,15 @@ def _unicode_line(
                 if payload:
                     message += f" (hidden text: '{_quote(payload)}')"
             findings.append(finding(rule, message, found[0][0]))
-        for column, word, odd in hidden.mixed_script_words(line):
-            findings.append(
-                finding(
-                    "homoglyph",
-                    f"has the word '{_quote(word)}', which mixes Latin with {_names(odd)}",
-                    column,
+        if modes["homoglyph"]:
+            for column, word, odd in hidden.mixed_script_words(line):
+                findings.append(
+                    finding(
+                        "homoglyph",
+                        f"has the word '{_quote(word)}', which mixes Latin with {_names(odd)}",
+                        column,
+                    )
                 )
-            )
     except LimitReached as error:
         error.findings = findings + error.findings
         raise

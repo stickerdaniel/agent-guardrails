@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Inputs `co-author-trailers` and `agent-identities`, each `error`, `warn` or `off`
+- Inputs `unicode-homoglyphs` and `unicode-unusual-spaces`, each `inherit`, `error`, `warn` or `off`; an explicit value wins over `hidden-unicode`
+- Input `unicode-exclude-paths`: literal file and directory paths whose added lines skip the hidden Unicode check. An unreadable file under them still fails
+- Inputs `allowed-identities` and `additional-identities`: `email:<address>` and `github:<handle>` selectors that exempt addresses from, or add them to, the trailer and identity checks
+- Input `additional-binary-extensions`: further formats that may be binary
+- Input `additional-attribution-exemptions`: further PR author logins exempt from the attribution check
+
+### Changed
+
+- `hidden-unicode` accepts `off`
+
+### Breaking
+
+- An input name that matches no declared input, ignoring case, fails the run. v1 ignored it with a runner warning
+
+### Migration
+
+- A v1 workflow with valid input names works unchanged
+
 ## [1.0.0] - 2026-09-29
 
 ### Added
