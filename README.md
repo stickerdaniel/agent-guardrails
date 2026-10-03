@@ -27,18 +27,14 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/agent-guardrails@a3508d7320e64370b878359b1f4ae541b507224f # v1.0.0
+      - uses: stickerdaniel/agent-guardrails@951ebf9b0d14ada7ed1f86caca2bf780e511cc4c # v2.0.0
         with:
           require-model-attribution: false
 ```
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
 
-This example pins v1.0.0, which knows only `require-model-attribution` and `hidden-unicode` with `error` or `warn`, and ignores every other input. The rest of the configuration below needs a v2.0.0 pin.
-
 ## Configuration
-
-From v2.0.0:
 
 | Input | Default | Effect |
 | --- | --- | --- |
