@@ -13,7 +13,7 @@ The action is now Post No Bills, at `stickerdaniel/post-no-bills`. Inputs, defau
 ### Changed
 
 - The repository moved from `stickerdaniel/agent-guardrails`. GitHub does not redirect actions after a rename, so `uses: stickerdaniel/agent-guardrails@<sha>` stops resolving for every version, including earlier ones
-- The action's display name is `Post No Bills`; annotation titles and log lines start with `post-no-bills` instead of `agent-guardrails`
+- The action's display name is `Post No Bills`. The plain log prefix and the title of the action's own failure annotations are `post-no-bills` instead of `agent-guardrails`; rule findings keep their titles
 - The README opens with an illustration of the Contributors list and keeps the input caveats in the configuration table
 
 ### Migration

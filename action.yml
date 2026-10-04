@@ -1,5 +1,5 @@
 name: Post No Bills
-description: Check agent authorship, model attribution, and hidden Unicode in pull requests.
+description: Fail pull requests that carry AI co-author trailers, agent commit identities or hidden Unicode; require a model disclosure.
 author: stickerdaniel
 
 inputs:

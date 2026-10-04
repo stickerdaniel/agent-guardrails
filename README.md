@@ -53,7 +53,7 @@ Pin a release SHA. Make `check-bot-coauthors` a required check and give the job 
 | `unicode-exclude-paths` | empty | Paths whose added lines skip the hidden Unicode check. Literal and case-sensitive; a trailing `/` marks a directory. A pull request can add files there. |
 | `allowed-identities` | empty | Addresses that are not agents, as `email:<address>` or `github:<handle>`. A matching exception, not authentication: anyone can put any address in a commit. |
 | `additional-identities` | empty | Addresses that are agents besides the built-in list, in the same form. |
-| `additional-binary-extensions` | empty | Extensions that may be binary besides the built-in ones, lowercase without a dot. Such files are not scanned, whatever they contain. |
+| `additional-binary-extensions` | empty | Extensions that may be binary besides the built-in ones, lowercase without a dot. A binary file with such an extension passes unscanned and without a format check; a text file is still scanned. |
 | `additional-attribution-exemptions` | empty | PR author logins exempt from the attribution check, and from nothing else. |
 
 Lists take one entry per line:
