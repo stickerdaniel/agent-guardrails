@@ -25,7 +25,7 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -no-color
 
 ## Releasing
 
-Releases are lightweight `vX.Y.Z` tags on the current green `main` tip with an immutable GitHub release. A published version is never moved or reused; a fix ships as a new patch release. A removed or renamed input, a stricter default, or a new check that fails by default is a major version.
+Releases are lightweight `vX.Y.Z` tags on the current green `main` tip with an immutable GitHub release. A published version is never moved or reused; a fix ships as a new patch release. A removed or renamed input, a stricter default, or a new check that fails by default is a major version. The one exception is 2.1.0, which turned on model attribution by default as a minor release; its CHANGELOG entry says so.
 
 Before tagging, ensure no merge is queued. Keep `main` and the new tag unchanged until the release workflow and its readback finish. Then verify that both still name the released commit and that the release is immutable. A mismatch stops delivery and requires investigation; the workflow's last ref check is not an atomic publication lock.
 
