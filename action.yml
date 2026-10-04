@@ -4,9 +4,9 @@ author: stickerdaniel
 
 inputs:
   require-model-attribution:
-    description: Require a "Generated with <model>" line as the last non-empty line of the PR body. true or false.
+    description: Require a "Generated with <model>" line as the last non-empty line of the PR body. true or false; false turns the check off.
     required: false
-    default: "false"
+    default: "true"
   co-author-trailers:
     description: Severity of Co-authored-by trailers that name a coding agent, in commit messages and the PR body. error, warn or off.
     required: false

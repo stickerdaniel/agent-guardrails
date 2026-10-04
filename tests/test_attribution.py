@@ -218,10 +218,10 @@ class AnnotationTests(unittest.TestCase):
         self.assertIn("Model-only is the minimum, with an optional final period", output)
         self.assertIn("Detailed attribution with the job, coding-agent harness", output)
         self.assertIn(
-            '"Generated with Claude Opus 5" or "Generated with Claude Opus 5."', output
+            '"Generated with Claude Opus 5.5" or "Generated with Claude Opus 5.5."', output
         )
         self.assertIn(
-            "Generated with Claude Opus 5 for implementation in Claude Code via T3 Code.",
+            "Generated with Claude Opus 5.5 for implementation in Claude Code via T3 Code.",
             output,
         )
 

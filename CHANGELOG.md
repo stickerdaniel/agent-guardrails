@@ -2,9 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), with one exception: 2.1.0 changes a default.
 
 ## [Unreleased]
+
+## [2.1.0] - 2026-10-04
+
+This minor release changes a default, which Semantic Versioning reserves for a major release. A PR that passed under 2.0.0 can fail under 2.1.0.
+
+### Changed
+
+- `require-model-attribution` defaults to `true`. Every PR body then needs a final `Generated with <model>` line, unless the PR author is `renovate[bot]`, `dependabot[bot]`, or listed in `additional-attribution-exemptions`
+- The attribution error message's examples name Claude Opus 5.5. The accepted attribution forms are unchanged
+
+### Migration
+
+- A workflow that set `require-model-attribution` keeps its pass or fail result
+- A workflow that relied on the default and does not want the check sets `require-model-attribution: false`
 
 ## [2.0.0] - 2026-10-03
 

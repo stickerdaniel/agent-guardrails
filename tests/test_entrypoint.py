@@ -66,7 +66,7 @@ class CleanPullRequestTests(RemoteTestCase):
 
 
 class RuleTests(RemoteTestCase):
-    def _run(self, head: str, body: str = "", inputs: dict[str, str] | None = None, **overrides: str):
+    def _run(self, head: str, body: str | None = _ATTRIBUTION, inputs: dict[str, str] | None = None, **overrides: str):
         self.remote.open_pull_request(head)
         return self.remote.run_action(self.remote.event(head=head, body=body), inputs, **overrides)
 
@@ -118,6 +118,15 @@ class RuleTests(RemoteTestCase):
         self.assertEqual(required.returncode, 1)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
         self.assertEqual(optional.returncode, 0, optional.stdout)
+
+    def test_attribution_is_required_unless_turned_off(self) -> None:
+        head = self.remote.commit("Add x", files={"x.txt": "x\n"})
+        default = self._run(head, body="Done.")
+        self.assertEqual(default.returncode, 1, default.stdout)
+        self.assertIn("::error title=PR model attribution required::", default.stdout)
+        off = self._run(head, body="Done.", inputs={"require-model-attribution": "false"})
+        self.assertEqual(off.returncode, 0, off.stdout)
+        self.assertNotIn("attribution", off.stdout)
 
     def test_hidden_unicode_warn_is_accepted(self) -> None:
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})

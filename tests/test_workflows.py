@@ -44,7 +44,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(
             defaults,
             {
-                "require-model-attribution": "false",
+                "require-model-attribution": "true",
                 "co-author-trailers": "error",
                 "agent-identities": "error",
                 "hidden-unicode": "error",
@@ -244,7 +244,7 @@ class RunnerInputsTests(unittest.TestCase):
         self.assertEqual(inputs["typo"], "")
         # An explicit empty value is not replaced by the default.
         self.assertEqual(inputs["co-author-trailers"], "")
-        self.assertEqual(inputs["require-model-attribution"], "false")
+        self.assertEqual(inputs["require-model-attribution"], "true")
         self.assertEqual(len(inputs), len(event.INPUT_NAMES) + 1)
         self.assertTrue(all(isinstance(value, str) for value in inputs.values()))
 

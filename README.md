@@ -9,7 +9,7 @@ A GitHub Action that checks pull requests for coding agent signatures and hidden
 - **Agents signing themselves into your history.** A `Co-authored-by` trailer naming a coding agent, in a commit message or the PR body. Squash merging can carry it into your default branch.
 - **Commits made under an agent's identity.** A commit authored or committed by a coding agent's address, such as `noreply@anthropic.com`.
 - **Text reviewers cannot see.** Zero-width spaces, bidi controls, tag characters, private-use characters, and letters from another script that pass for Latin, in the title, body, commit messages, and added lines. Unusual spaces warn by default.
-- **Undisclosed model use (opt-in).** A PR body whose last non-empty line is not `Generated with <model>`, such as `Generated with Claude Opus 5.5`.
+- **Undisclosed model use.** A PR body whose last non-empty line is not `Generated with <model>`, such as `Generated with Claude Opus 5.5`. Every PR needs it, including one with an empty body or written without an agent, unless its author is exempt. `require-model-attribution: false` turns this off.
 
 ## Usage
 
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: stickerdaniel/agent-guardrails@951ebf9b0d14ada7ed1f86caca2bf780e511cc4c # v2.0.0
         with:
-          require-model-attribution: false
+          require-model-attribution: true
 ```
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
@@ -38,7 +38,7 @@ Pin a release SHA. Make `check-bot-coauthors` a required check and give the job 
 
 | Input | Default | Effect |
 | --- | --- | --- |
-| `require-model-attribution` | `false` | `true` turns on the attribution check. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
+| `require-model-attribution` | `true` | `false` turns off the attribution check. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
 | `co-author-trailers` | `error` | `error`, `warn` or `off` for agent trailers in commit messages and the PR body. |
 | `agent-identities` | `error` | `error`, `warn` or `off` for commits authored or committed by an agent's address. |
 | `hidden-unicode` | `error` | `error`, `warn` or `off` for invisible and private-use characters. |

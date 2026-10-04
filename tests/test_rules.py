@@ -177,8 +177,9 @@ class AttributionRuleTests(unittest.TestCase):
         )
         self.assertFalse(self._fails(body))
 
-    def test_not_required_passes_without_attribution(self) -> None:
-        self.assertEqual(rules.check_attribution("No line", "jane", _DEFAULT), [])
+    def test_off_passes_without_attribution(self) -> None:
+        off = policy({"require-model-attribution": "false"})
+        self.assertEqual(rules.check_attribution("No line", "jane", off), [])
 
     def test_dependency_bots_are_exempt(self) -> None:
         for login in ("renovate[bot]", "dependabot[bot]"):

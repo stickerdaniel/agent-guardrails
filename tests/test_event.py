@@ -157,11 +157,11 @@ class InputTests(unittest.TestCase):
         self.assertIn(message, str(caught.exception))
         return str(caught.exception)
 
-    def test_defaults_are_the_v1_checks(self) -> None:
+    def test_defaults_turn_every_check_on(self) -> None:
         self.assertEqual(
             _policy(),
             event.Policy(
-                require_model_attribution=False,
+                require_model_attribution=True,
                 co_author_trailers="error",
                 agent_identities="error",
                 hidden_unicode="error",

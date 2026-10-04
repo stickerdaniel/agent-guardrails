@@ -39,9 +39,9 @@ _MACROSCOPE_BLOCK_RE = re.compile(
 _ERROR = (
     "Model attribution is required as the final non-empty PR body line. "
     'Model-only is the minimum, with an optional final period: "Generated with '
-    'Claude Opus 5" or "Generated with Claude Opus 5." Detailed attribution '
+    'Claude Opus 5.5" or "Generated with Claude Opus 5.5." Detailed attribution '
     "with the job, coding-agent harness, optional host, and final period is "
-    'recommended: "Generated with Claude Opus 5 for implementation in Claude '
+    'recommended: "Generated with Claude Opus 5.5 for implementation in Claude '
     'Code via T3 Code." Use commas or "/" between jobs for one model; "and" '
     "separates model/job pairs."
 )

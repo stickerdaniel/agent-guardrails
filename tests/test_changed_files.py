@@ -12,7 +12,7 @@ from unittest import mock
 from agent_guardrails import event, gitdata, rules
 from agent_guardrails.main import main
 
-from .support import TOKEN, RemoteTestCase, foreign_commands
+from .support import ATTRIBUTION, TOKEN, RemoteTestCase, foreign_commands
 
 _ZWSP = "​"
 _MACROSCOPE = (
@@ -348,7 +348,7 @@ class DriverTests(_ChangedFileTestCase):
                 "Привет world, café\n",
             },
         )
-        result = self._run(head, title="Add greetings \U0001F44B", body="Grüße")
+        result = self._run(head, title="Add greetings \U0001F44B", body=f"Grüße\n\n{ATTRIBUTION}")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("::error", result.stdout)
 
@@ -449,11 +449,11 @@ class PolicyDriverTests(_ChangedFileTestCase):
     def test_exclusions_leave_title_body_and_messages_alone(self) -> None:
         head = self.remote.commit(f"Add{_ZWSP} x", files={"x.md": f"a{_ZWSP}b\n"})
         result = self._run(
-            head, {"unicode-exclude-paths": "x.md"}, title=f"Fix{_ZWSP}", body=f"Do{_ZWSP}ne"
+            head, {"unicode-exclude-paths": "x.md"}, title=f"Fix{_ZWSP}", body=f"Do{_ZWSP}ne\n\n{ATTRIBUTION}"
         )
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertEqual(result.stdout.count("::error title=Invisible character::"), 3)
-        for where in ("The PR title", "The PR body", f"The message of commit {head}"):
+        for where in ("The PR title", "Line 1 of the PR body", f"The message of commit {head}"):
             self.assertIn(f"::error title=Invisible character::{where} has 1", result.stdout)
         self.assertNotIn("file=x.md", result.stdout)
 
@@ -534,7 +534,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
     def test_every_unicode_rule_off(self) -> None:
         line = "a\u200bb prompt\ue000 10\u00a0km p\u0430ypal"
         head = self.remote.commit(f"Add {line}", files={"x.md": f"{line}\n"})
-        result = self._run(head, {"hidden-unicode": "off"}, title=line, body=line)
+        result = self._run(head, {"hidden-unicode": "off"}, title=line, body=f"{line}\n\n{ATTRIBUTION}")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("0 errors, 0 warnings", result.stdout)
 

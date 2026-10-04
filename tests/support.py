@@ -23,6 +23,9 @@ RUN_PY = ROOT / "run.py"
 TOKEN = "ghs_FAKE0123456789abcdefghijklmnopqrstuv"
 HUMAN = "jane@example.com"
 CLAUDE = "noreply@anthropic.com"
+# The default action inputs require it, so a fixture PR body carries it unless
+# the test is about attribution.
+ATTRIBUTION = "Generated with Claude Opus 5.5"
 # A3: every variable a git call may see, besides its GIT_CONFIG_KEY_<n> and
 # GIT_CONFIG_VALUE_<n> pairs.
 GIT_ENVIRONMENT = frozenset({
@@ -168,7 +171,7 @@ class Remote:
         head: str,
         base: str | None = None,
         title: str = "Add x",
-        body: str | None = "",
+        body: str | None = ATTRIBUTION,
         login: str = "jane",
         number: int = 1,
         base_ref: str = "main",
