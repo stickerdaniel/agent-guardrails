@@ -1,0 +1,16 @@
+name: Remote receipt
+
+# Throwaway control: resolves the released action through its remote address.
+# The action accepts only pull_request_target, so the expected result is that
+# refusal, printed by the renamed package after the download.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  remote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: stickerdaniel/post-no-bills@cf1ab380bfc68079de8113e1a86d2a8350abbc55 # v2.2.0
