@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-04
+
+The action is now Post No Bills, at `stickerdaniel/post-no-bills`. Inputs, defaults, and rules are unchanged.
+
+### Changed
+
+- The repository moved from `stickerdaniel/agent-guardrails`. GitHub does not redirect actions after a rename, so `uses: stickerdaniel/agent-guardrails@<sha>` stops resolving for every version, including earlier ones
+- The action's display name is `Post No Bills`; annotation titles and log lines start with `post-no-bills` instead of `agent-guardrails`
+- The README opens with an illustration of the Contributors list and keeps the input caveats in the configuration table
+
+### Migration
+
+- Replace `stickerdaniel/agent-guardrails@` with `stickerdaniel/post-no-bills@` in `uses:`. Pinned SHAs stay valid
+
 ## [2.1.0] - 2026-10-04
 
 This minor release changes a default, which Semantic Versioning reserves for a major release. A PR that passed under 2.0.0 can fail under 2.1.0.

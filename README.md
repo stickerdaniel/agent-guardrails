@@ -1,20 +1,28 @@
-# agent-guardrails
+# Post No Bills
 
-[![CI](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/agent-guardrails/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A GitHub Action that checks pull requests for coding agent signatures and hidden Unicode.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
+  <img alt="Illustration. Left, agent trailer merged: the Contributors list shows 2, stickerdaniel and claude, after a commit message with Co-authored-by: Claude. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5." src="docs/hero-light.png" width="800">
+</picture>
+
+A coding agent that adds `Co-authored-by: Claude <noreply@anthropic.com>` to a commit signs your repository. Once that trailer reaches your default branch, the agent's account can join your Contributors list, next to the people who wrote the code. Post No Bills is a GitHub Action that fails such pull requests, and asks for a one-line model disclosure in the PR body instead.
+
+> [!IMPORTANT]
+> This action was `stickerdaniel/agent-guardrails`. GitHub does not redirect actions after a rename, so replace `stickerdaniel/agent-guardrails@` with `stickerdaniel/post-no-bills@` in your workflow. Pinned SHAs stay valid.
 
 ## What it catches
 
 - **Agents signing themselves into your history.** A `Co-authored-by` trailer naming a coding agent, in a commit message or the PR body. Squash merging can carry it into your default branch.
 - **Commits made under an agent's identity.** A commit authored or committed by a coding agent's address, such as `noreply@anthropic.com`.
 - **Text reviewers cannot see.** Zero-width spaces, bidi controls, tag characters, private-use characters, and letters from another script that pass for Latin, in the title, body, commit messages, and added lines. Unusual spaces warn by default.
-- **Undisclosed model use.** A PR body whose last non-empty line is not `Generated with <model>`, such as `Generated with Claude Opus 5.5`. Every PR needs it, including one with an empty body or written without an agent, unless its author is exempt. `require-model-attribution: false` turns this off.
+- **Undisclosed model use.** A PR body whose last non-empty line is not `Generated with <model>`, such as `Generated with Claude Opus 5.5`. Every PR needs it, including one with an empty body or written without an agent, unless its author is exempt.
 
 ## Usage
 
 ```yaml
-name: Agent Guardrails
+name: Post No Bills
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -27,7 +35,7 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/agent-guardrails@9ced49e05b0469fb32895fe24b20d2f7295f3a45 # v2.1.0
+      - uses: stickerdaniel/post-no-bills@9ced49e05b0469fb32895fe24b20d2f7295f3a45 # v2.1.0
 ```
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
@@ -40,12 +48,12 @@ Pin a release SHA. Make `check-bot-coauthors` a required check and give the job 
 | `co-author-trailers` | `error` | `error`, `warn` or `off` for agent trailers in commit messages and the PR body. |
 | `agent-identities` | `error` | `error`, `warn` or `off` for commits authored or committed by an agent's address. |
 | `hidden-unicode` | `error` | `error`, `warn` or `off` for invisible and private-use characters. |
-| `unicode-homoglyphs` | `inherit` | `inherit`, `error`, `warn` or `off` for look-alike letters. `inherit` follows `hidden-unicode`. |
-| `unicode-unusual-spaces` | `inherit` | `inherit`, `error`, `warn` or `off` for unusual spaces. `inherit` warns unless `hidden-unicode` is `off`. |
-| `unicode-exclude-paths` | empty | Paths whose added lines skip the hidden Unicode check. Literal and case-sensitive; a trailing `/` marks a directory. |
-| `allowed-identities` | empty | Addresses that are not agents, as `email:<address>` or `github:<handle>`. |
+| `unicode-homoglyphs` | `inherit` | `inherit`, `error`, `warn` or `off` for look-alike letters. `inherit` follows `hidden-unicode`; any other value applies even when `hidden-unicode` is `off`. |
+| `unicode-unusual-spaces` | `inherit` | `inherit`, `error`, `warn` or `off` for unusual spaces. `inherit` warns unless `hidden-unicode` is `off`; any other value applies even then. |
+| `unicode-exclude-paths` | empty | Paths whose added lines skip the hidden Unicode check. Literal and case-sensitive; a trailing `/` marks a directory. A pull request can add files there. |
+| `allowed-identities` | empty | Addresses that are not agents, as `email:<address>` or `github:<handle>`. A matching exception, not authentication: anyone can put any address in a commit. |
 | `additional-identities` | empty | Addresses that are agents besides the built-in list, in the same form. |
-| `additional-binary-extensions` | empty | Extensions that may be binary besides the built-in ones, lowercase without a dot. |
+| `additional-binary-extensions` | empty | Extensions that may be binary besides the built-in ones, lowercase without a dot. Such files are not scanned, whatever they contain. |
 | `additional-attribution-exemptions` | empty | PR author logins exempt from the attribution check, and from nothing else. |
 
 Lists take one entry per line:
@@ -62,9 +70,16 @@ Lists take one entry per line:
             wasm
 ```
 
-An `email:` selector matches that address, ignoring ASCII case. A `github:` selector matches the handle's noreply address, with or without its numeric ID, and not a vendor address such as `copilot@github.com`. An unknown input name, an invalid value, a repeated entry, or an address both lists can match fails the run. Input names ignore case, as on GitHub.
+Set inputs as literals in the workflow on your default branch, never from pull request content such as the title, labels, or branch name.
 
-Set these values as literals in the workflow on your default branch, never from pull request content such as the title, labels, or branch name. An allowed identity is a matching exception, not authentication: anyone can put any address in a commit. An added extension does not prove the file is that format. A pull request can add files under an excluded path. An explicit `error` or `warn` for `unicode-homoglyphs` or `unicode-unusual-spaces` runs that rule even under `hidden-unicode: off`. No input makes an unreadable file or a reached limit pass.
+<details>
+<summary>Input rules</summary>
+
+- An `email:` selector matches that address, ignoring ASCII case. A `github:` selector matches the handle's noreply address, with or without its numeric ID, and not a vendor address such as `copilot@github.com`.
+- An unknown input name, an invalid value, a repeated entry, or an address both lists can match fails the run. Input names ignore case, as on GitHub.
+- No input makes an unreadable file or a reached limit pass.
+
+</details>
 
 ## How it works
 
@@ -86,4 +101,4 @@ A Linux or macOS runner with Python 3.10+ and git 2.31+ on `PATH`. GitHub-hosted
 
 ## License
 
-MIT. `agent_guardrails/hidden.py` comes from [no-ai-marks](https://github.com/mishan/no-ai-marks); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. `post_no_bills/hidden.py` comes from [no-ai-marks](https://github.com/mishan/no-ai-marks); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
