@@ -364,7 +364,7 @@ def fetch_pull_request(
 ) -> PullRequest:
     """Fetch base and head from the base repository and read the commits
     between them. Every doubt about the range raises GitError."""
-    root = tempfile.mkdtemp(prefix="agent-guardrails-", dir=settings.runner_temp)
+    root = tempfile.mkdtemp(prefix="post-no-bills-", dir=settings.runner_temp)
     try:
         repo = _Repository(root, settings, credential)
         _require_git(repo, log)

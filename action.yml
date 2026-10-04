@@ -1,4 +1,4 @@
-name: Agent Guardrails
+name: Post No Bills
 description: Check agent authorship, model attribution, and hidden Unicode in pull requests.
 author: stickerdaniel
 
@@ -51,7 +51,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Run agent guardrails
+    - name: Run Post No Bills
       shell: bash
       # Composite actions get no INPUT_* variables, so every value the
       # entrypoint reads is named here. The inputs travel as one JSON map,
@@ -67,12 +67,12 @@ runs:
         CA_EVENT_NAME: ${{ github.event_name }}
       run: |
         if ! command -v python3 >/dev/null 2>&1; then
-          echo "::error title=agent-guardrails::python3 is not on PATH. This action needs Python 3.10 or newer."
+          echo "::error title=post-no-bills::python3 is not on PATH. This action needs Python 3.10 or newer."
           exit 1
         fi
         python3 --version
         if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
-          echo "::error title=agent-guardrails::This action needs Python 3.10 or newer."
+          echo "::error title=post-no-bills::This action needs Python 3.10 or newer."
           exit 1
         fi
         python3 -I "$GITHUB_ACTION_PATH/run.py"

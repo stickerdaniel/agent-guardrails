@@ -141,7 +141,7 @@ class CredentialTests(RemoteTestCase):
         self.assertEqual(foreign_commands(stdout), [])
         self.assertIn("<U+0023>#[warning]spoofed", stdout)
         for line in stdout.splitlines():
-            self.assertRegex(line, r"^(::add-mask::|::error title=|agent-guardrails: )")
+            self.assertRegex(line, r"^(::add-mask::|::error title=|post-no-bills: )")
 
     def test_mask_precedes_the_first_git_call(self) -> None:
         self._run()
@@ -296,7 +296,7 @@ class NewSideContractTests(_FakeGitTestCase):
             with self.subTest(mode=mode):
                 code, stdout, _ = self._main(head, mode, PATH=path)
                 self.assertEqual(code, 1, stdout)
-                self.assertIn("::error title=agent-guardrails::cannot parse the diff\n", stdout)
+                self.assertIn("::error title=post-no-bills::cannot parse the diff\n", stdout)
                 self.assertNotIn("checked 1 commit", stdout)
 
     def test_header_only_creation_fails_in_either_mode(self) -> None:
@@ -340,7 +340,7 @@ class NewSideContractTests(_FakeGitTestCase):
                         self.assertIn("checked 1 commit, 2 changed files", stdout)
                     else:
                         self.assertEqual(code, 1, stdout)
-                        self.assertIn("::error title=agent-guardrails::cannot parse the diff\n", stdout)
+                        self.assertIn("::error title=post-no-bills::cannot parse the diff\n", stdout)
                         self.assertNotIn("checked 1 commit", stdout)
 
     def test_content_change_shown_as_none_fails_in_either_mode(self) -> None:
@@ -396,7 +396,7 @@ class NewSideContractTests(_FakeGitTestCase):
                         self.assertIn("checked 1 commit, 3 changed files", stdout)
                     else:
                         self.assertEqual(code, 1, stdout)
-                        self.assertIn("::error title=agent-guardrails::cannot parse the diff\n", stdout)
+                        self.assertIn("::error title=post-no-bills::cannot parse the diff\n", stdout)
                         self.assertNotIn("checked 1 commit", stdout)
 
 
@@ -454,7 +454,7 @@ class AcquisitionLimitTests(_FakeGitTestCase):
             code, stdout, _ = self._main(head)
         self.assertEqual(code, 1, stdout)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: git printed more than 1 MiB",
+            "::error title=post-no-bills::not fully checked: git printed more than 1 MiB",
             stdout,
         )
         self.assertEqual(os.listdir(self.remote.runner_temp), [])
@@ -483,7 +483,7 @@ class AcquisitionLimitTests(_FakeGitTestCase):
             )
         self.assertEqual(code, 1, stdout)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: reading this pull request "
+            "::error title=post-no-bills::not fully checked: reading this pull request "
             "with git took longer than 1 seconds",
             stdout,
         )
@@ -495,7 +495,7 @@ class AcquisitionLimitTests(_FakeGitTestCase):
         code, stdout, _ = self._main(head, PATH=self._fake_git(script, "head", "tr"))
         self.assertEqual(code, 1, stdout)
         (failure,) = [line for line in stdout.splitlines() if line.startswith("::error")]
-        self.assertTrue(failure.startswith("::error title=agent-guardrails::git --version failed: eee"))
+        self.assertTrue(failure.startswith("::error title=post-no-bills::git --version failed: eee"))
         self.assertLess(len(failure), 5000)
 
     def test_a_secret_cut_off_by_the_stderr_limit_is_not_shown_in_part(self) -> None:
@@ -586,7 +586,7 @@ class AcquisitionLimitTests(_FakeGitTestCase):
                 head, PATH=self._fake_git(script, "sleep", "git")
             )
         self.assertEqual(code, 1, stdout)
-        self.assertIn("::error title=agent-guardrails::internal error: RuntimeError", stdout)
+        self.assertIn("::error title=post-no-bills::internal error: RuntimeError", stdout)
         self.assertLess(elapsed, 15)
         self.assertEqual(at_removal, self._ENDED)
 
@@ -675,7 +675,7 @@ class AcquisitionLimitTests(_FakeGitTestCase):
             tracemalloc.stop()
         return code, stdout, peak
 
-    _TOO_MANY = "::error title=agent-guardrails::not fully checked: git printed more than 10,000 lines"
+    _TOO_MANY = "::error title=post-no-bills::not fully checked: git printed more than 10,000 lines"
 
     def test_many_short_lines_stop_before_they_are_parsed(self) -> None:
         # 400 kB of patch. As lines and records it would take over 10 MB.

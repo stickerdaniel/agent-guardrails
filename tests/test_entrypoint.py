@@ -228,7 +228,7 @@ class FailClosedTests(RemoteTestCase):
             self.remote.event(head=head), PATH=self._path_with_git(None)
         )
         self._fails_with(
-            "::error title=agent-guardrails::git is not on PATH. This action needs git 2.31 or newer.",
+            "::error title=post-no-bills::git is not on PATH. This action needs git 2.31 or newer.",
             result,
         )
 
@@ -239,8 +239,8 @@ class FailClosedTests(RemoteTestCase):
             self.remote.event(head=head),
             PATH=self._path_with_git('echo "git version 2.30.9"'),
         )
-        self._fails_with("::error title=agent-guardrails::This action needs git 2.31 or newer.", result)
-        self.assertIn("agent-guardrails: git version 2.30.9\n", result.stdout)
+        self._fails_with("::error title=post-no-bills::This action needs git 2.31 or newer.", result)
+        self.assertIn("post-no-bills: git version 2.30.9\n", result.stdout)
 
     def test_malformed_event_fails(self) -> None:
         path = self.remote.root / "event.json"
@@ -277,7 +277,7 @@ class FailClosedTests(RemoteTestCase):
             self.remote.event(head=head), {"require-model-attributionn": "true"}
         )
         self._fails_with(
-            "::error title=agent-guardrails::unknown input(s): 'require-model-attributionn'\n", result
+            "::error title=post-no-bills::unknown input(s): 'require-model-attributionn'\n", result
         )
         self.assertEqual(result.stderr, "")
         self.assertNotIn("git version", result.stdout)

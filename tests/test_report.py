@@ -23,7 +23,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("<U+000A>", annotation)
         self.assertIn("%25", annotation)
         self.assertTrue(annotation.startswith("::error title=a%25b<U+000A>%3A%3Aerror%3A%3Aspoof::"))
-        self.assertTrue(plain.startswith("agent-guardrails: error: "))
+        self.assertTrue(plain.startswith("post-no-bills: error: "))
 
     def test_plain_title_passes_unchanged(self) -> None:
         output = self._annotate(title="Bot commit author", message="Commit abc is authored by x.")
@@ -38,7 +38,7 @@ class ReportTests(unittest.TestCase):
     def test_plain_log_line_renders_controls(self) -> None:
         stream = io.StringIO()
         Reporter(stream).log("::warning::x\r\n")
-        self.assertEqual(stream.getvalue(), "agent-guardrails: ::warning::x<U+000D><U+000A>\n")
+        self.assertEqual(stream.getvalue(), "post-no-bills: ::warning::x<U+000D><U+000A>\n")
 
     def test_legacy_command_opener_is_shown_not_run(self) -> None:
         stream = io.StringIO()
@@ -51,7 +51,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(foreign_commands(output), [])
         self.assertEqual(len(output.splitlines()), 3)
         self.assertIn("title=<U+0023>#[warning]t::m #<U+0023>#[error]m", output)
-        self.assertIn("agent-guardrails: <U+0023>#[set-output name=x]y\n", output)
+        self.assertIn("post-no-bills: <U+0023>#[set-output name=x]y\n", output)
 
 
 if __name__ == "__main__":

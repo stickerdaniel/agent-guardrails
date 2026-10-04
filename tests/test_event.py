@@ -277,7 +277,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual(main(environ, stdout=stdout), 1)
         output = stdout.getvalue()
         self.assertEqual(foreign_commands(output), [])
-        self.assertIn("::error title=agent-guardrails::input hidden-unicode must be", output)
+        self.assertIn("::error title=post-no-bills::input hidden-unicode must be", output)
         self.assertNotIn("z" * 81, output)
 
     def test_malformed_transport_fails(self) -> None:

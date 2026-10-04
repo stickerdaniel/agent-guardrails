@@ -17,7 +17,7 @@ from .hidden import visible
 from .rules import Finding
 
 _SEVERITIES = ("error", "warning")
-_PREFIX = "agent-guardrails: "
+_PREFIX = "post-no-bills: "
 # Each "#" that begins a "##[". What is left, "#[", starts no command.
 _LEGACY_COMMAND = re.compile(r"#(?=#\[)")
 
@@ -84,4 +84,4 @@ class Reporter:
 
     def failure(self, message: str) -> None:
         """The check could not run to the end, which fails it."""
-        self.annotate("error", "agent-guardrails", message)
+        self.annotate("error", "post-no-bills", message)

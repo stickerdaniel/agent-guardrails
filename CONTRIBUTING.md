@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve agent-guardrails. It runs with a token on untrusted pull requests, so a few rules are stricter than usual.
+Thanks for helping improve Post No Bills. It runs with a token on untrusted pull requests, so a few rules are stricter than usual.
 
 ## Development
 

@@ -249,8 +249,8 @@ class DriverTests(_ChangedFileTestCase):
         head = self.remote.commit("Add a logo", files={"img/logo.png": b"\x89PNG\r\n\x1a\n\0"})
         result = self._run(head)
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("agent-guardrails: not scanned (binary): img/logo.png\n", result.stdout)
-        self.assertIn("agent-guardrails: not scanned (submodule): sub\n", result.stdout)
+        self.assertIn("post-no-bills: not scanned (binary): img/logo.png\n", result.stdout)
+        self.assertIn("post-no-bills: not scanned (submodule): sub\n", result.stdout)
         self.assertIn("checked 1 commit, 2 changed files", result.stdout)
 
     def test_binary_replaced_by_text_is_scanned(self) -> None:
@@ -286,7 +286,7 @@ class DriverTests(_ChangedFileTestCase):
             "::error file=latin1.txt,title=Cannot scan a changed file::cannot decode latin1.txt",
             result.stdout,
         )
-        self.assertIn("agent-guardrails: not scanned (binary): logo.png\n", result.stdout)
+        self.assertIn("post-no-bills: not scanned (binary): logo.png\n", result.stdout)
         # Nothing was added to plain.md, so its old line is not a finding.
         self.assertNotIn("plain.md", result.stdout)
         self.assertIn("checked 1 commit, 4 changed files", result.stdout)
@@ -375,7 +375,7 @@ class DriverTests(_ChangedFileTestCase):
         result = self._run(head, body=body, mode="warn")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "::error title=post-no-bills::not fully checked: the hidden Unicode check "
             "stopped at the PR body",
             result.stdout,
         )
@@ -388,7 +388,7 @@ class DriverTests(_ChangedFileTestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertEqual(result.stdout.count("::warning file=x.md,"), 1000)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: stopped after 1000 findings",
+            "::error title=post-no-bills::not fully checked: stopped after 1000 findings",
             result.stdout,
         )
 
@@ -400,12 +400,12 @@ class DriverTests(_ChangedFileTestCase):
         self.assertEqual(
             result.stdout.count("::warning file=x.md,line=1,title=Look-alike letter::"), 1000
         )
-        self.assertEqual(result.stdout.count("agent-guardrails: warning: Look-alike letter: "), 1000)
+        self.assertEqual(result.stdout.count("post-no-bills: warning: Look-alike letter: "), 1000)
         self.assertTrue(
             result.stdout.endswith(
-                "::error title=agent-guardrails::not fully checked: stopped after 1000 findings, "
+                "::error title=post-no-bills::not fully checked: stopped after 1000 findings, "
                 "the most this action reports for one pull request\n"
-                "agent-guardrails: error: agent-guardrails: not fully checked: stopped after "
+                "post-no-bills: error: post-no-bills: not fully checked: stopped after "
                 "1000 findings, the most this action reports for one pull request\n"
             ),
             result.stdout[-500:],
@@ -442,7 +442,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         )
         result = self._run(head, {"unicode-exclude-paths": "fixtures/"})
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("agent-guardrails: not scanned (excluded): fixtures/x.md\n", result.stdout)
+        self.assertIn("post-no-bills: not scanned (excluded): fixtures/x.md\n", result.stdout)
         self.assertNotIn("Invisible character", result.stdout)
         self.assertIn("checked 1 commit, 2 changed files", result.stdout)
 
@@ -465,7 +465,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         result = self._run(head, {"unicode-exclude-paths": "fixtures/"})
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("::error file=src/a.md,line=1,title=Invisible character::", result.stdout)
-        self.assertIn("agent-guardrails: not scanned (excluded): fixtures/b.md\n", result.stdout)
+        self.assertIn("post-no-bills: not scanned (excluded): fixtures/b.md\n", result.stdout)
         self.assertNotIn("file=fixtures/b.md", result.stdout)
 
     def test_unreadable_files_fail_inside_an_exclusion(self) -> None:
@@ -507,7 +507,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
                     result.stdout,
                 )
                 self.assertIn(
-                    "agent-guardrails: not scanned (excluded): fixtures/ok\ufffd.txt\n", result.stdout
+                    "post-no-bills: not scanned (excluded): fixtures/ok\ufffd.txt\n", result.stdout
                 )
                 self.assertNotIn("Invisible character", result.stdout)
 
@@ -516,7 +516,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         head = self.remote.commit("Add", files={"x.wasm": wasm, "y.wasm": f"a{_ZWSP}b\n"})
         allowed = self._run(head, {"additional-binary-extensions": "wasm"})
         self.assertEqual(allowed.returncode, 1, allowed.stdout)
-        self.assertIn("agent-guardrails: not scanned (binary): x.wasm\n", allowed.stdout)
+        self.assertIn("post-no-bills: not scanned (binary): x.wasm\n", allowed.stdout)
         self.assertNotIn("file=x.wasm", allowed.stdout)
         # Text is scanned whatever its extension.
         self.assertIn("::error file=y.wasm,line=1,title=Invisible character::", allowed.stdout)
@@ -553,7 +553,7 @@ class PolicyDriverTests(_ChangedFileTestCase):
         with mock.patch.object(gitdata, "OUTPUT_LIMIT", 2**20):
             self.assertEqual(main(environ, stdout=stdout), 1, stdout.getvalue())
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: git printed more than 1 MiB",
+            "::error title=post-no-bills::not fully checked: git printed more than 1 MiB",
             stdout.getvalue(),
         )
 
@@ -575,7 +575,7 @@ class InspectionLimitTests(_ChangedFileTestCase):
         with mock.patch.object(rules, "HIT_LIMIT", 1000):
             stdout = self._main(head)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "::error title=post-no-bills::not fully checked: the hidden Unicode check "
             "stopped at line 2 of x.md, which has more than the 1,000 suspicious characters",
             stdout,
         )
@@ -586,7 +586,7 @@ class InspectionLimitTests(_ChangedFileTestCase):
         with mock.patch.object(rules, "LINE_LENGTH_LIMIT", 1000):
             stdout = self._main(head)
         self.assertIn(
-            "::error title=agent-guardrails::not fully checked: the hidden Unicode check "
+            "::error title=post-no-bills::not fully checked: the hidden Unicode check "
             "stopped at line 1 of x.png, longer than the 1,000 characters",
             stdout,
         )

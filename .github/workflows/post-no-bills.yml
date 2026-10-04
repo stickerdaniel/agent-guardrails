@@ -1,4 +1,4 @@
-name: Agent Guardrails
+name: Post No Bills
 
 # The canonical caller, except that this repository runs its own action. The
 # workflow and the checked-out action both come from the default branch, never
@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Run agent guardrails
+      - name: Run Post No Bills
         uses: ./
         with:
           require-model-attribution: true
