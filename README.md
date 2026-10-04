@@ -4,13 +4,10 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
-  <img alt="Illustration. Left, agent trailer merged: the Contributors list shows 2, stickerdaniel and claude, after a commit message with Co-authored-by: Claude. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5." src="docs/hero-light.png" width="800">
+  <img alt="Left, agent trailers merged: the Contributors list shows 4, stickerdaniel, claude, cursoragent and codex, after commit messages with Co-authored-by trailers for Claude, Cursor Agent and Codex. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5." src="docs/hero-light.png" width="800">
 </picture>
 
 A coding agent that adds `Co-authored-by: Claude <noreply@anthropic.com>` to a commit signs your repository. Once that trailer reaches your default branch, the agent's account can join your Contributors list, next to the people who wrote the code. Post No Bills is a GitHub Action that fails such pull requests, and asks for a one-line model disclosure in the PR body instead.
-
-> [!IMPORTANT]
-> This action was `stickerdaniel/agent-guardrails`. GitHub does not redirect actions after a rename, so replace `stickerdaniel/agent-guardrails@` with `stickerdaniel/post-no-bills@` in your workflow. Pinned SHAs stay valid.
 
 ## What it catches
 
@@ -35,7 +32,7 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/post-no-bills@9ced49e05b0469fb32895fe24b20d2f7295f3a45 # v2.1.0
+      - uses: stickerdaniel/post-no-bills@cf1ab380bfc68079de8113e1a86d2a8350abbc55 # v2.2.0
 ```
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
