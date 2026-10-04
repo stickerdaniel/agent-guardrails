@@ -27,9 +27,7 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/agent-guardrails@951ebf9b0d14ada7ed1f86caca2bf780e511cc4c # v2.0.0
-        with:
-          require-model-attribution: true
+      - uses: stickerdaniel/agent-guardrails@9ced49e05b0469fb32895fe24b20d2f7295f3a45 # v2.1.0
 ```
 
 Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
