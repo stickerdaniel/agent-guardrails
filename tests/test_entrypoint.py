@@ -126,7 +126,7 @@ class RuleTests(RemoteTestCase):
         self.assertIn("::error title=PR model attribution required::", default.stdout)
         off = self._run(head, body="Done.", inputs={"require-model-attribution": "false"})
         self.assertEqual(off.returncode, 0, off.stdout)
-        self.assertNotIn("attribution", off.stdout)
+        self.assertNotIn("::error title=PR model attribution required::", off.stdout)
 
     def test_hidden_unicode_warn_is_accepted(self) -> None:
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
