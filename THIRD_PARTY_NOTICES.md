@@ -6,7 +6,7 @@ projects.
 
 ## no-ai-marks
 
-[`agent_guardrails/hidden.py`](agent_guardrails/hidden.py) is
+[`post_no_bills/hidden.py`](post_no_bills/hidden.py) is
 `no_ai_marks/chars.py` from
 [mishan/no-ai-marks](https://github.com/mishan/no-ai-marks) at commit
 `747c07a76d2ad6471fa73779dc8de97fbcb4aefe`, copied without changes below its
@@ -38,7 +38,7 @@ SOFTWARE.
 
 ## Unicode data
 
-The look-alike letter tables in `agent_guardrails/hidden.py` were selected
+The look-alike letter tables in `post_no_bills/hidden.py` were selected
 upstream with the Unicode confusables data (`confusables.txt`, Unicode
 Technical Standard #39), which is covered by this notice:
 

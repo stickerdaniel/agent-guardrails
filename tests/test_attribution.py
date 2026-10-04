@@ -10,8 +10,8 @@ from __future__ import annotations
 import io
 import unittest
 
-from agent_guardrails import attribution, rules
-from agent_guardrails.report import Reporter
+from post_no_bills import attribution, rules
+from post_no_bills.report import Reporter
 
 from .support import ROOT, policy
 

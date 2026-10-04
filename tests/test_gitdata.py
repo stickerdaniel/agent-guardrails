@@ -15,8 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_guardrails import event, gitdata
-from agent_guardrails.main import main
+from post_no_bills import event, gitdata
+from post_no_bills.main import main
 
 from .support import TOKEN, RemoteTestCase, foreign_commands, git_environment
 

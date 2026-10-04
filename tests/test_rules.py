@@ -5,8 +5,8 @@ import re
 import time
 import unittest
 
-from agent_guardrails import rules
-from agent_guardrails.gitdata import Commit
+from post_no_bills import rules
+from post_no_bills.gitdata import Commit
 
 from .support import CLAUDE, HUMAN, policy
 

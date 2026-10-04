@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_guardrails import event
+from post_no_bills import event
 
 from . import yamlsubset
 from .support import ROOT, TOKEN, RemoteTestCase, git_environment, runner_inputs

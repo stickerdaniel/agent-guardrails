@@ -9,6 +9,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent_guardrails.main import main  # noqa: E402
+from post_no_bills.main import main  # noqa: E402
 
 raise SystemExit(main())

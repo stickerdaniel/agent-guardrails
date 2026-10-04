@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from agent_guardrails import gitdata
+from post_no_bills import gitdata
 
 from .support import CLAUDE, TOKEN, RemoteTestCase, foreign_commands
 

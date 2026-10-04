@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import unittest
 
-from agent_guardrails.report import Reporter
+from post_no_bills.report import Reporter
 
 from .support import foreign_commands
 

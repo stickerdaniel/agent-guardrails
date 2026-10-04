@@ -9,7 +9,7 @@ import tracemalloc
 import unittest
 from unittest import mock
 
-from agent_guardrails import gitdata, hidden, rules
+from post_no_bills import gitdata, hidden, rules
 
 from .support import policy
 

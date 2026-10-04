@@ -9,8 +9,8 @@ import os
 import unittest
 from unittest import mock
 
-from agent_guardrails import event, gitdata, rules
-from agent_guardrails.main import main
+from post_no_bills import event, gitdata, rules
+from post_no_bills.main import main
 
 from .support import ATTRIBUTION, TOKEN, RemoteTestCase, foreign_commands
 

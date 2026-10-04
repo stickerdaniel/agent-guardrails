@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 
-from agent_guardrails import event
+from post_no_bills import event
 
 from . import yamlsubset
 

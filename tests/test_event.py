@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_guardrails import event
-from agent_guardrails.main import main
+from post_no_bills import event
+from post_no_bills.main import main
 
 from .support import TOKEN, foreign_commands, runner_inputs
 
