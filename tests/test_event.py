@@ -75,7 +75,7 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(settings.body, "Generated with GPT-5.6 for implementation in Claude Code.")
         self.assertEqual(settings.number, 7)
         self.assertEqual((settings.base_ref, settings.base_sha, settings.head_sha), ("main", _BASE, _HEAD))
-        self.assertEqual(settings.policy.model_attribution, "model")
+        self.assertEqual(settings.policy.model_attribution, "host")
         self.assertEqual(settings.policy.hidden_unicode, "error")
 
     def test_null_body_is_accepted_as_none(self) -> None:
@@ -166,7 +166,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual(
             _policy(),
             event.Policy(
-                model_attribution="model",
+                model_attribution="host",
                 co_author_trailers="error",
                 agent_identities="error",
                 hidden_unicode="error",

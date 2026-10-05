@@ -6,7 +6,7 @@ inputs:
   model-attribution:
     description: Minimum detail of the final "Generated with ..." line of the PR body. off, model, job, tool or host.
     required: false
-    default: model
+    default: host
   co-author-trailers:
     description: Severity of Co-authored-by trailers that name a coding agent, in commit messages and the PR body. error, warn or off.
     required: false

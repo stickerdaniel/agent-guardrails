@@ -25,7 +25,7 @@ HUMAN = "jane@example.com"
 CLAUDE = "noreply@anthropic.com"
 # The default action inputs require it, so a fixture PR body carries it unless
 # the test is about attribution.
-ATTRIBUTION = "Generated with Claude Opus 5.5"
+ATTRIBUTION = "Generated with Claude Opus 5.5 for implementation in Claude Code via T3 Code."
 # A3: every variable a git call may see, besides its GIT_CONFIG_KEY_<n> and
 # GIT_CONFIG_VALUE_<n> pairs.
 GIT_ENVIRONMENT = frozenset({

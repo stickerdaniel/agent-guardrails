@@ -422,10 +422,9 @@ class TemplateTests(unittest.TestCase):
             if line.strip()
         ]
 
-        self.assertEqual(lines[-1], "Generated with [model] for [job] in [tool].")
-        self.assertIn('"Generated with <model>" with or without a final period', lines[-2])
-        self.assertIn("detailed form below, which requires its final period", lines[-2])
-        self.assertIn("coding-agent runtime", lines[-2])
+        self.assertEqual(lines[-1], "Generated with [model] for [job] in [tool] via [host].")
+        self.assertIn("default level is host", lines[-2])
+        self.assertIn("ends with a period", lines[-2])
         self.assertIn("in Claude Code via T3 Code", lines[-2])
         self.assertEqual(attribution.parse(lines[-1]), _PLACEHOLDER)
 

@@ -145,7 +145,7 @@ class AttributionRuleTests(unittest.TestCase):
 
     _TEMPLATE_BODY = (
         "## Problem\n\nx\n\n"
-        "<!-- CI accepts ... -->\nGenerated with [model] for [job] in [tool].\n"
+        "<!-- CI accepts ... -->\nGenerated with [model] for [job] in [tool] via [host].\n"
     )
 
     def _fails(self, body: str | None, login: str = "jane") -> bool:

@@ -11,7 +11,7 @@ from post_no_bills import gitdata
 
 from .support import CLAUDE, TOKEN, RemoteTestCase, foreign_commands
 
-_ATTRIBUTION = "Done.\n\nGenerated with Claude Opus 5 for implementation in Claude Code."
+_ATTRIBUTION = "Done.\n\nGenerated with Claude Opus 5 for implementation in Claude Code via T3 Code."
 _EMPTY_RANGE = "no commits between base and head"
 
 

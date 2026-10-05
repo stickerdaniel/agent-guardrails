@@ -47,7 +47,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(
             defaults,
             {
-                "model-attribution": "model",
+                "model-attribution": "host",
                 "co-author-trailers": "error",
                 "agent-identities": "error",
                 "hidden-unicode": "error",
@@ -247,7 +247,7 @@ class RunnerInputsTests(unittest.TestCase):
         self.assertEqual(inputs["typo"], "")
         # An explicit empty value is not replaced by the default.
         self.assertEqual(inputs["co-author-trailers"], "")
-        self.assertEqual(inputs["model-attribution"], "model")
+        self.assertEqual(inputs["model-attribution"], "host")
         self.assertEqual(len(inputs), len(event.INPUT_NAMES) + 1)
         self.assertTrue(all(isinstance(value, str) for value in inputs.values()))
 
@@ -279,7 +279,7 @@ class DogfoodCallerTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["fetch-depth"], 1)
 
         self.assertEqual(check["uses"], "./")
-        self.assertEqual(check["with"]["model-attribution"], "model")
+        self.assertEqual(check["with"]["model-attribution"], "host")
 
 
 class CentralChecksTests(unittest.TestCase):
