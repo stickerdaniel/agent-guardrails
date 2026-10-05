@@ -30,4 +30,4 @@ jobs:
       - name: Run Post No Bills
         uses: ./
         with:
-          require-model-attribution: true
+          model-attribution: model

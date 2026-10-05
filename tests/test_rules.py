@@ -145,11 +145,11 @@ class AttributionRuleTests(unittest.TestCase):
 
     _TEMPLATE_BODY = (
         "## Problem\n\nx\n\n"
-        "<!-- CI accepts ... -->\nGenerated with [model] for [job] in [harness].\n"
+        "<!-- CI accepts ... -->\nGenerated with [model] for [job] in [tool].\n"
     )
 
     def _fails(self, body: str | None, login: str = "jane") -> bool:
-        return bool(rules.check_attribution(body, login, policy({"require-model-attribution": "true"})))
+        return bool(rules.check_attribution(body, login, policy({"model-attribution": "model"})))
 
     def test_unfilled_template_line_fails(self) -> None:
         self.assertTrue(self._fails(self._TEMPLATE_BODY))
@@ -178,7 +178,7 @@ class AttributionRuleTests(unittest.TestCase):
         self.assertFalse(self._fails(body))
 
     def test_off_passes_without_attribution(self) -> None:
-        off = policy({"require-model-attribution": "false"})
+        off = policy({"model-attribution": "off"})
         self.assertEqual(rules.check_attribution("No line", "jane", off), [])
 
     def test_dependency_bots_are_exempt(self) -> None:
@@ -188,7 +188,7 @@ class AttributionRuleTests(unittest.TestCase):
 
     def test_added_exemption_covers_attribution_only(self) -> None:
         exempt = policy(
-            {"require-model-attribution": "true", "additional-attribution-exemptions": "release-bot"}
+            {"model-attribution": "model", "additional-attribution-exemptions": "release-bot"}
         )
         self.assertEqual(rules.check_attribution("No line", "release-bot", exempt), [])
         self.assertTrue(rules.check_attribution("No line", "Release-bot", exempt))
@@ -198,6 +198,26 @@ class AttributionRuleTests(unittest.TestCase):
         trailer = "Done.\n\nCo-authored-by: Claude <noreply@anthropic.com>"
         self.assertEqual(
             _titles(rules.check_body(trailer, exempt)), ["Bot co-author trailer in the PR body"]
+        )
+
+    def test_configured_level_is_enforced(self) -> None:
+        job = policy({"model-attribution": "job"})
+        self.assertTrue(rules.check_attribution("Generated with Claude Opus 5", "jane", job))
+        self.assertFalse(
+            rules.check_attribution("Generated with Claude Opus 5 for implementation.", "jane", job)
+        )
+        host = policy({"model-attribution": "host"})
+        self.assertTrue(
+            rules.check_attribution(
+                "Generated with Claude Opus 5 for implementation in Claude Code.", "jane", host
+            )
+        )
+        self.assertFalse(
+            rules.check_attribution(
+                "Generated with Claude Opus 5 for implementation in Claude Code via T3 Code.",
+                "jane",
+                host,
+            )
         )
 
 

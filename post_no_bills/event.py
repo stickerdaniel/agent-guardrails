@@ -35,7 +35,7 @@ RUNNER_TEMP = "RUNNER_TEMP"
 # name that matches none with only a warning, so CA_INPUTS holds whatever the
 # caller wrote and the declared defaults it did not override.
 INPUT_NAMES = (
-    "require-model-attribution",
+    "model-attribution",
     "co-author-trailers",
     "agent-identities",
     "hidden-unicode",
@@ -49,7 +49,7 @@ INPUT_NAMES = (
 )
 _LIST_INPUTS = INPUT_NAMES[6:]
 
-_BOOLEANS = {"true": True, "false": False}
+_LEVELS = ("off", "model", "job", "tool", "host")
 _MODES = ("error", "warn", "off")
 _OVERRIDES = ("inherit", *_MODES)
 _SHA = re.compile(r"[0-9a-f]{40}")
@@ -84,10 +84,11 @@ class InvalidEvent(Exception):
 @dataclass(frozen=True)
 class Policy:
     """What the caller asked the checks to do. Each mode is error, warn or
-    off, with inherit already resolved. The two sets hold only what the
-    caller adds to the built-in ones, which stay in gitdata and rules."""
+    off, with inherit already resolved. model_attribution is off, model, job,
+    tool or host. The two sets hold only what the caller adds to the built-in
+    ones, which stay in gitdata and rules."""
 
-    require_model_attribution: bool
+    model_attribution: str
     co_author_trailers: str
     agent_identities: str
     hidden_unicode: str
@@ -301,7 +302,7 @@ def _literals(
 def _policy(inputs: Mapping[str, str]) -> Policy:
     """Validate every input, those of a check that is off too, and resolve
     inherit."""
-    require = _choice(inputs, "require-model-attribution", tuple(_BOOLEANS))
+    level = _choice(inputs, "model-attribution", _LEVELS)
     trailers = _choice(inputs, "co-author-trailers", _MODES)
     identities = _choice(inputs, "agent-identities", _MODES)
     hidden = _choice(inputs, "hidden-unicode", _MODES)
@@ -334,7 +335,7 @@ def _policy(inputs: Mapping[str, str]) -> Policy:
     if spaces == "inherit":
         spaces = "off" if hidden == "off" else "warn"
     return Policy(
-        require_model_attribution=_BOOLEANS[require],
+        model_attribution=level,
         co_author_trailers=trailers,
         agent_identities=identities,
         hidden_unicode=hidden,

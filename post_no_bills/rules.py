@@ -6,9 +6,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from . import gitdata, hidden
-from .attribution import _ERROR as ATTRIBUTION_ERROR
-from .attribution import has_model_attribution
+from . import attribution, gitdata, hidden
 from .event import Policy, selects
 from .gitdata import ChangedFile, Commit
 
@@ -229,14 +227,15 @@ def check_body(body: str | None, policy: Policy, budget: Budget | None = None) -
 
 
 def check_attribution(body: str | None, login: str, policy: Policy) -> list[Finding]:
-    """Behaviour 4, only where the caller asks for it."""
-    if not policy.require_model_attribution:
+    """Behaviour 4. Off, and the exempt logins, produce nothing."""
+    if policy.model_attribution == "off":
         return []
     if login in EXEMPT_FROM_ATTRIBUTION or login in policy.additional_attribution_exemptions:
         return []
-    if has_model_attribution(body):
+    message = attribution.check(body, policy.model_attribution)
+    if message is None:
         return []
-    return [Finding("PR model attribution required", ATTRIBUTION_ERROR)]
+    return [Finding("PR model attribution required", message)]
 
 
 def check_unicode(

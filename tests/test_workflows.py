@@ -47,7 +47,7 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(
             defaults,
             {
-                "require-model-attribution": "true",
+                "model-attribution": "model",
                 "co-author-trailers": "error",
                 "agent-identities": "error",
                 "hidden-unicode": "error",
@@ -178,33 +178,33 @@ class CompositeStepTests(RemoteTestCase):
 
     def test_inputs_reach_the_entrypoint(self) -> None:
         required, _ = self._run_step(
-            {"require-model-attribution": "true", "hidden-unicode": "error"}, body="No line"
+            {"model-attribution": "model", "hidden-unicode": "error"}, body="No line"
         )
         self.assertEqual(required.returncode, 1, required.stdout + required.stderr)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
 
         optional, _ = self._run_step(
-            {"require-model-attribution": "false", "hidden-unicode": "warn"}, body="No line"
+            {"model-attribution": "off", "hidden-unicode": "warn"}, body="No line"
         )
         self.assertEqual(optional.returncode, 0, optional.stdout + optional.stderr)
 
         invalid, _ = self._run_step(
-            {"require-model-attribution": "false", "hidden-unicode": "of"}, body="No line"
+            {"model-attribution": "off", "hidden-unicode": "of"}, body="No line"
         )
         self.assertIn("input hidden-unicode must be error, warn or off", invalid.stdout)
 
     def test_a_name_in_another_case_is_that_input(self) -> None:
         # The runner adds no default for a declared name the caller wrote in
         # another case, so the caller's value is the only one.
-        required, _ = self._run_step({"Require-Model-Attribution": "true"}, body="No line")
+        required, _ = self._run_step({"Model-Attribution": "model"}, body="No line")
         self.assertEqual(required.returncode, 1, required.stdout + required.stderr)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
 
     def test_a_misspelt_input_fails_before_any_git_call(self) -> None:
-        result, events = self._run_step({"require-model-attributionn": "true"}, body="No line")
+        result, events = self._run_step({"model-attributionn": "model"}, body="No line")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(
-            "::error title=post-no-bills::unknown input(s): 'require-model-attributionn'",
+            "::error title=post-no-bills::unknown input(s): 'model-attributionn'",
             result.stdout,
         )
         self.assertEqual([record for kind, record in events if kind == "git"], [])
@@ -214,7 +214,7 @@ class CompositeStepTests(RemoteTestCase):
         environment, so a git started by the shell would see it unmasked."""
         additions = self._interpreter_additions()
         result, events = self._run_step(
-            {"require-model-attribution": "false", "hidden-unicode": "error"}, body=""
+            {"model-attribution": "off", "hidden-unicode": "error"}, body=""
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -247,7 +247,7 @@ class RunnerInputsTests(unittest.TestCase):
         self.assertEqual(inputs["typo"], "")
         # An explicit empty value is not replaced by the default.
         self.assertEqual(inputs["co-author-trailers"], "")
-        self.assertEqual(inputs["require-model-attribution"], "true")
+        self.assertEqual(inputs["model-attribution"], "model")
         self.assertEqual(len(inputs), len(event.INPUT_NAMES) + 1)
         self.assertTrue(all(isinstance(value, str) for value in inputs.values()))
 
@@ -279,7 +279,7 @@ class DogfoodCallerTests(unittest.TestCase):
         self.assertEqual(checkout["with"]["fetch-depth"], 1)
 
         self.assertEqual(check["uses"], "./")
-        self.assertIs(check["with"]["require-model-attribution"], True)
+        self.assertEqual(check["with"]["model-attribution"], "model")
 
 
 class CentralChecksTests(unittest.TestCase):

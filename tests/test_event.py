@@ -43,7 +43,7 @@ class LoadTests(unittest.TestCase):
     ) -> event.Settings:
         text = raw if raw is not None else json.dumps(_payload() if payload is None else payload)
         self.path.write_text(text, encoding="utf-8")
-        given = {"require-model-attribution": "true"} if inputs is None else inputs
+        given = {} if inputs is None else inputs
         environ = {
             "PATH": "/usr/bin",
             event.INPUTS: json.dumps(runner_inputs(given)),
@@ -75,22 +75,27 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(settings.body, "Generated with GPT-5.6 for implementation in Claude Code.")
         self.assertEqual(settings.number, 7)
         self.assertEqual((settings.base_ref, settings.base_sha, settings.head_sha), ("main", _BASE, _HEAD))
-        self.assertTrue(settings.policy.require_model_attribution)
+        self.assertEqual(settings.policy.model_attribution, "model")
         self.assertEqual(settings.policy.hidden_unicode, "error")
 
     def test_null_body_is_accepted_as_none(self) -> None:
         self.assertIsNone(self._load(_payload(body=None)).body)
 
     def test_inputs_accept_exactly_their_values(self) -> None:
-        self.assertFalse(
-            self._load(inputs={"require-model-attribution": "false"}).policy.require_model_attribution
+        self.assertEqual(
+            self._load(inputs={"model-attribution": "off"}).policy.model_attribution, "off"
+        )
+        self.assertEqual(
+            self._load(inputs={"model-attribution": "host"}).policy.model_attribution, "host"
         )
         self.assertEqual(self._load(inputs={"hidden-unicode": "warn"}).policy.hidden_unicode, "warn")
         self.assertEqual(self._load(inputs={"hidden-unicode": "off"}).policy.hidden_unicode, "off")
-        for value in ("yes", "True", "1", ""):
+        for value in ("true", "false", "yes", ""):
             with self.subTest(value=value):
-                self._rejects("input require-model-attribution must be true or false",
-                              inputs={"require-model-attribution": value})
+                self._rejects(
+                    "input model-attribution must be off, model, job, tool or host",
+                    inputs={"model-attribution": value},
+                )
         for value in ("Error", ""):
             with self.subTest(value=value):
                 self._rejects("input hidden-unicode must be error, warn or off",
@@ -161,7 +166,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual(
             _policy(),
             event.Policy(
-                require_model_attribution=True,
+                model_attribution="model",
                 co_author_trailers="error",
                 agent_identities="error",
                 hidden_unicode="error",
@@ -178,7 +183,7 @@ class InputTests(unittest.TestCase):
     def test_every_input_is_read(self) -> None:
         policy = _policy(
             {
-                "require-model-attribution": "true",
+                "model-attribution": "host",
                 "co-author-trailers": "warn",
                 "agent-identities": "off",
                 "hidden-unicode": "warn",
@@ -194,7 +199,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual(
             policy,
             event.Policy(
-                require_model_attribution=True,
+                model_attribution="host",
                 co_author_trailers="warn",
                 agent_identities="off",
                 hidden_unicode="warn",
@@ -241,8 +246,8 @@ class InputTests(unittest.TestCase):
                 with self.subTest(name=name, value=value):
                     self._refuses(f"input {name} must be inherit, error, warn or off", {name: value})
         self._refuses(
-            "input require-model-attribution must be true or false",
-            {"require-model-attribution": "inherit"},
+            "input model-attribution must be off, model, job, tool or host",
+            {"model-attribution": "inherit"},
         )
 
     def test_names_ignore_case(self) -> None:
@@ -250,10 +255,26 @@ class InputTests(unittest.TestCase):
         self.assertEqual((policy.hidden_unicode, policy.unicode_homoglyphs), ("warn", "error"))
         self._refuses("input hidden-unicode must be", {"Hidden-Unicode": "Warn"})
 
+    def test_model_attribution_lists_its_levels_in_order(self) -> None:
+        for level in ("off", "model", "job", "tool", "host"):
+            with self.subTest(level=level):
+                self.assertEqual(_policy({"model-attribution": level}).model_attribution, level)
+        for value in ("true", "false", "Host", ""):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    self._refuses("input model-attribution must be", {"model-attribution": value}),
+                    f"input model-attribution must be off, model, job, tool or host, got {value!r}",
+                )
+
     def test_unknown_names_fail(self) -> None:
         self.assertEqual(
-            self._refuses("unknown input", {"require-model-attributionn": "true"}),
-            "unknown input(s): 'require-model-attributionn'",
+            self._refuses("unknown input", {"model-attributionn": "model"}),
+            "unknown input(s): 'model-attributionn'",
+        )
+        # The removed boolean has no alias and no message of its own.
+        self.assertEqual(
+            self._refuses("unknown input", {"require-model-attribution": "true"}),
+            "unknown input(s): 'require-model-attribution'",
         )
         # A known name with an empty value of another input is still unknown.
         self._refuses("unknown input(s): 'hidden_unicode'", {"hidden_unicode": ""})
@@ -488,7 +509,7 @@ class InputTests(unittest.TestCase):
              "input allowed-identities line 1"),
             ({"agent-identities": "off", "additional-identities": "x"}, "input additional-identities line 1"),
             ({"hidden-unicode": "off", "unicode-exclude-paths": "/abs"}, "input unicode-exclude-paths line 1"),
-            ({"require-model-attribution": "false", "additional-attribution-exemptions": "a b"},
+            ({"model-attribution": "off", "additional-attribution-exemptions": "a b"},
              "input additional-attribution-exemptions line 1"),
         ]
         for given, message in cases:

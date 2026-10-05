@@ -24,7 +24,7 @@ class CleanPullRequestTests(RemoteTestCase):
 
         result = self.remote.run_action(
             self.remote.event(head=head, body=_ATTRIBUTION),
-            {"require-model-attribution": "true"},
+            {"model-attribution": "model"},
         )
 
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -113,8 +113,8 @@ class RuleTests(RemoteTestCase):
     def test_reads_event_path_from_environment(self) -> None:
         """A null body read through GITHUB_EVENT_PATH fails only when required."""
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
-        required = self._run(head, body=None, inputs={"require-model-attribution": "true"})
-        optional = self._run(head, body=None, inputs={"require-model-attribution": "false"})
+        required = self._run(head, body=None, inputs={"model-attribution": "model"})
+        optional = self._run(head, body=None, inputs={"model-attribution": "off"})
         self.assertEqual(required.returncode, 1)
         self.assertIn("::error title=PR model attribution required::", required.stdout)
         self.assertEqual(optional.returncode, 0, optional.stdout)
@@ -124,7 +124,7 @@ class RuleTests(RemoteTestCase):
         default = self._run(head, body="Done.")
         self.assertEqual(default.returncode, 1, default.stdout)
         self.assertIn("::error title=PR model attribution required::", default.stdout)
-        off = self._run(head, body="Done.", inputs={"require-model-attribution": "false"})
+        off = self._run(head, body="Done.", inputs={"model-attribution": "off"})
         self.assertEqual(off.returncode, 0, off.stdout)
         self.assertNotIn("::error title=PR model attribution required::", off.stdout)
 
@@ -260,8 +260,8 @@ class FailClosedTests(RemoteTestCase):
         self.remote.open_pull_request(head)
         event = self.remote.event(head=head)
         self._fails_with(
-            "input require-model-attribution must be true or false",
-            self.remote.run_action(event, {"require-model-attribution": "yes"}),
+            "input model-attribution must be off, model, job, tool or host",
+            self.remote.run_action(event, {"model-attribution": "yes"}),
         )
         self._fails_with(
             "input hidden-unicode must be error, warn or off",
@@ -274,10 +274,10 @@ class FailClosedTests(RemoteTestCase):
         head = self.remote.commit("Add x", files={"x.txt": "x\n"})
         self.remote.open_pull_request(head)
         result = self.remote.run_action(
-            self.remote.event(head=head), {"require-model-attributionn": "true"}
+            self.remote.event(head=head), {"model-attributionn": "model"}
         )
         self._fails_with(
-            "::error title=post-no-bills::unknown input(s): 'require-model-attributionn'\n", result
+            "::error title=post-no-bills::unknown input(s): 'model-attributionn'\n", result
         )
         self.assertEqual(result.stderr, "")
         self.assertNotIn("git version", result.stdout)

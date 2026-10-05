@@ -47,7 +47,7 @@ Pin a release SHA. Make `check-bot-coauthors` a required check and give the job 
 
 | Input | Default | Effect |
 | --- | --- | --- |
-| `require-model-attribution` | `true` | `false` turns off the attribution check. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
+| `model-attribution` | `model` | `off`, `model`, `job`, `tool` or `host`; see Model attribution. PRs opened by `renovate[bot]` and `dependabot[bot]` are exempt. |
 | `co-author-trailers` | `error` | `error`, `warn` or `off` for agent trailers in commit messages and the PR body. |
 | `agent-identities` | `error` | `error`, `warn` or `off` for commits authored or committed by an agent's address. |
 | `hidden-unicode` | `error` | `error`, `warn` or `off` for invisible and private-use characters. |
@@ -83,6 +83,32 @@ Set inputs as literals in the workflow on your default branch, never from pull r
 - No input makes an unreadable file or a reached limit pass.
 
 </details>
+
+## Model attribution
+
+The attribution line is the last non-empty line of the PR body. For a non-exempt author, the table is the result at each level.
+
+`off`: no attribution check; every PR body passes this check.
+
+`and` separates models. From `job` up, every model has a job, and commas or `/` separate the jobs of one model. `for`, `in`, `and` and `via` cannot appear inside a name; a job may still contain `for`. A final period is required when the line has a job or a tool, and optional only for a line that has neither.
+
+The checker validates the syntax of the parsed fields, not whether every name mentioned anywhere in the line is complete: `for work in progress.` reads as job `work`, tool `progress`; `Research and Development.` reads as two models; an ampersand or an uppercase `AND` is not a separator.
+
+| Last line of the PR body | `model` | `job` | `tool` | `host` |
+| --- | :-: | :-: | :-: | :-: |
+| *(none)* | ✗ | ✗ | ✗ | ✗ |
+| `Generated with [model] for [job] in [tool].` | ✗ | ✗ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5` | ✓ | ✗ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 and GPT-6 Pro` | ✓ | ✗ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 in Claude Code.` | ✓ | ✗ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation.` | ✓ | ✓ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review.` | ✓ | ✓ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation, tests in Claude Code.` | ✓ | ✓ | ✓ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review in Claude Code.` | ✓ | ✓ | ✓ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation in Claude Code via T3 Code.` | ✓ | ✓ | ✓ | ✓ |
+| `Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review in Claude Code via T3 Code.` | ✓ | ✓ | ✓ | ✓ |
+| `Generated with Claude Opus 5.5 for implementation and GPT-6 Pro in Claude Code.` | ✗ | ✗ | ✗ | ✗ |
+| `Generated with Claude Opus 5.5 for implementation in Claude Code and GPT-6 Pro.` | ✗ | ✗ | ✗ | ✗ |
 
 ## How it works
 
