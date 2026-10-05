@@ -6,10 +6,21 @@ Agents write the code, people sign it. Models are disclosed in the PR body.
 
 <br>
 
+Rounded
+
 <p>
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
-  <img alt="Left, agent trailers merged: the Contributors list shows 4, stickerdaniel, claude, cursoragent and codex, after commit messages with Co-authored-by trailers for Claude, Cursor Agent and Codex. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review in Claude Code via T3 Code." src="docs/hero-light.png" width="800">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-rounded-dark.png">
+  <img alt="Left, agent trailers merged: the Contributors list shows 4, stickerdaniel, claude, cursoragent and codex, after commit messages with Co-authored-by trailers for Claude, Cursor Agent and Codex. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review in Claude Code via T3 Code." src="docs/hero-rounded-light.png" width="800">
+</picture>
+</p>
+
+Sharp
+
+<p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-sharp-dark.png">
+  <img alt="Left, agent trailers merged: the Contributors list shows 4, stickerdaniel, claude, cursoragent and codex, after commit messages with Co-authored-by trailers for Claude, Cursor Agent and Codex. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5 for implementation and GPT-6 Pro for review in Claude Code via T3 Code." src="docs/hero-sharp-light.png" width="800">
 </picture>
 </p>
 
