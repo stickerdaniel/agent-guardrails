@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-05
+
 ### Changed
 
 - `require-model-attribution` is replaced by `model-attribution`: `off`, `model`, `job`, `tool` or `host`, default `host`. The final attribution line uses a stricter grammar, where `for`, `in`, `and` and `via` separate the fields and cannot appear inside a name, and every model has a job or none does
