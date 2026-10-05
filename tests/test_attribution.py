@@ -32,7 +32,7 @@ _NO_JOB = "A model has no job"
 _NO_TOOL = "The last line names no tool"
 _NO_HOST = "The last line names no host"
 
-# The README table, in order. (body, passes at model, job, tool, host).
+# Attribution lines checked at every level. The README table is a subset. (body, passes at model, job, tool, host).
 _README = (
     (None, False, False, False, False),
     ("Generated with [model] for [job] in [tool].", False, False, False, False),
