@@ -2,10 +2,12 @@
 
 [![CI](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
   <img alt="Left, agent trailers merged: the Contributors list shows 4, stickerdaniel, claude, cursoragent and codex, after commit messages with Co-authored-by trailers for Claude, Cursor Agent and Codex. Right, blocked by Post No Bills: the list shows only stickerdaniel, and the PR body ends with Generated with Claude Opus 5.5." src="docs/hero-light.png" width="800">
 </picture>
+</p>
 
 A coding agent that adds `Co-authored-by: Claude <noreply@anthropic.com>` to a commit signs your repository. Once that trailer reaches your default branch, the agent's account can join your Contributors list, next to the people who wrote the code. Post No Bills is a GitHub Action that fails such pull requests, and asks for a one-line model disclosure in the PR body instead.
 
