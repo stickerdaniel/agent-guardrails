@@ -4,6 +4,8 @@
 
 Agents write the code, people sign it. Models are disclosed in the PR body.
 
+<br>
+
 <p>
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
