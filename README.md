@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-*Agents write the code, people sign it. Models are disclosed in the PR body.*
+Agents write the code, people sign it. Models are disclosed in the PR body.
 
 <p>
 <picture>
