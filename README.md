@@ -48,10 +48,10 @@ jobs:
   check-bot-coauthors:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/post-no-bills@cf1ab380bfc68079de8113e1a86d2a8350abbc55 # v2.2.0
+      - uses: stickerdaniel/post-no-bills@3a0295140a40edc1ded01766ed9d0ac42cd148a5 # v3.0.0
 ```
 
-Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing. This example pins v2.2.0. The `model-attribution` input ships in the next release, and the pin above moves with it.
+Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
 
 ## Configuration
 
