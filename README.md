@@ -47,13 +47,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  check-bot-coauthors:
+  post-no-bills:
     runs-on: ubuntu-latest
     steps:
       - uses: stickerdaniel/post-no-bills@3a0295140a40edc1ded01766ed9d0ac42cd148a5 # v3.0.0
 ```
 
-Make `check-bot-coauthors` a required check. Keep the release SHA pinned and give the job no `if:`: GitHub counts a skipped job as passing.
+Make `post-no-bills` a required check. Keep the release SHA pinned and give the job no `if:`: GitHub counts a skipped job as passing.
 
 Add this to your `AGENTS.md` so agents include the disclosure before CI runs:
 

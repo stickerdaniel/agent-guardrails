@@ -257,7 +257,7 @@ class DogfoodCallerTests(unittest.TestCase):
 
     def test_workflow_checks_attribution_in_required_job(self) -> None:
         workflow = _load(_WORKFLOWS / "post-no-bills.yml")
-        job = workflow["jobs"]["check-bot-coauthors"]
+        job = workflow["jobs"]["post-no-bills"]
         checkout, check = job["steps"]
 
         self.assertNotIn("pull_request", workflow["on"])
