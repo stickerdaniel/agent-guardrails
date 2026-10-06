@@ -13,7 +13,7 @@ Agents write the code, people sign it. Models are disclosed in the PR body.
 </picture>
 </p>
 
-Coding agents love to add `Co-authored-by:` trailers to your commit messages. Once one reaches your default branch, your Contributors list shows the agent's logo, free advertising for its vendor. Put your contributors first. Post No Bills is a GitHub Action that fails such pull requests and asks for a one-line model disclosure in the PR body instead, so you still see which models and tools your community uses.
+Coding agents add `Co-authored-by:` trailers to commits, putting their logos in your Contributors list. Post No Bills blocks that free advertising and requires a one-line model disclosure in the PR body instead. Credit your contributors; disclose your tools.
 
 ## What it catches
 
@@ -23,7 +23,7 @@ Coding agents love to add `Co-authored-by:` trailers to your commit messages. On
 - **Model disclosure.** The last line of the PR body names the model, the job, the tool and the host.
 
 <details>
-<summary>Details</summary>
+<summary><strong>Details</strong></summary>
 
 - A trailer in a commit message or the PR body counts. Squash merging can carry it into the default branch.
 - An agent's address, such as `noreply@anthropic.com`, counts as author or committer.
@@ -33,6 +33,8 @@ Coding agents love to add `Co-authored-by:` trailers to your commit messages. On
 </details>
 
 ## Usage
+
+Add `.github/workflows/post-no-bills.yml` on your default branch:
 
 ```yaml
 name: Post No Bills
@@ -51,14 +53,22 @@ jobs:
       - uses: stickerdaniel/post-no-bills@3a0295140a40edc1ded01766ed9d0ac42cd148a5 # v3.0.0
 ```
 
-Pin a release SHA. Make `check-bot-coauthors` a required check and give the job no `if:`, because GitHub counts a skipped job as passing.
+Make `check-bot-coauthors` a required check. Keep the release SHA pinned and give the job no `if:`: GitHub counts a skipped job as passing.
+
+Add this to your `AGENTS.md` so agents include the disclosure before CI runs:
+
+```text
+End PR bodies with `Generated with <model> for <job> in <tool> via <host>.`
+Repeat `<model> for <job>` joined by `and`; join jobs with `/`.
+Humans are `Human`. Ask for unknown values.
+```
 
 ## Configuration
 
-Defaults fail the pull request. Set an input to `warn` or `off` to loosen one check.
+Violations fail the check by default; unusual spaces warn. Severity inputs accept `warn` or `off`. `model-attribution` sets the required disclosure detail.
 
 <details>
-<summary>Inputs</summary>
+<summary><strong>Inputs</strong></summary>
 
 | Input | Default | Effect |
 | --- | --- | --- |
@@ -96,9 +106,9 @@ Set inputs as literals in the workflow on the default branch, never from pull re
 </details>
 
 <details>
-<summary>Model attribution</summary>
+<summary><strong>Model attribution</strong></summary>
 
-`host` is the default: model, job, tool and host. `off` turns the check off. A line that passes a stricter level also passes the ones below it.
+`host` is the default: model, job, tool and host. Use `Human` for human contributions. `off` turns the check off. A line that passes a stricter level also passes the ones below it.
 
 | Last line of the PR body | `model` | `job` | `tool` | `host` |
 | --- | :-: | :-: | :-: | :-: |
@@ -117,9 +127,9 @@ Set inputs as literals in the workflow on the default branch, never from pull re
 </details>
 
 <details>
-<summary>How it works</summary>
+<summary><strong>How it works</strong></summary>
 
-The workflow and the pinned action come from the default branch. The action fetches the PR and reads its commits, diff, title, and body as data, without checking out or running anything from the pull request. Every doubt fails the run.
+The workflow and the pinned action come from the default branch. The action fetches the PR and reads its commits, diff, title, and body as data, without checking out or running anything from the pull request. If a check cannot complete, the run fails.
 
 A Linux or macOS runner needs Python 3.10+ and git 2.31+ on `PATH`. GitHub-hosted Ubuntu runners have both. Windows is not supported.
 
