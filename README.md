@@ -50,7 +50,7 @@ jobs:
   post-no-bills:
     runs-on: ubuntu-latest
     steps:
-      - uses: stickerdaniel/post-no-bills@3a0295140a40edc1ded01766ed9d0ac42cd148a5 # v3.0.0
+      - uses: stickerdaniel/post-no-bills@7fd24bb70700c7cab15df1572cd11320b815d7b5 # v3.1.0
 ```
 
 Make `post-no-bills` a required check. Keep the release SHA pinned and give the job no `if:`: GitHub counts a skipped job as passing.
