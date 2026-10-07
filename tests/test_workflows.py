@@ -38,8 +38,9 @@ class ActionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.action = _load(ROOT / "action.yml")
 
-    def test_is_published_as_post_no_bills(self) -> None:
-        self.assertEqual(self.action["name"], "Post No Bills")
+    def test_is_published_under_its_marketplace_name(self) -> None:
+        # Marketplace rejects "Post No Bills": it matches an organization.
+        self.assertEqual(self.action["name"], "Post No Bills Check")
 
     def test_declares_the_inputs_with_literal_safe_defaults(self) -> None:
         inputs = self.action["inputs"]

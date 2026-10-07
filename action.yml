@@ -1,4 +1,4 @@
-name: Post No Bills
+name: Post No Bills Check
 description: Fail pull requests that carry AI co-author trailers, agent commit identities or hidden Unicode; require a model disclosure.
 author: stickerdaniel
 branding:
