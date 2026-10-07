@@ -1,6 +1,6 @@
 # Post No Bills
 
-[![CI](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Marketplace](https://img.shields.io/github/v/release/stickerdaniel/post-no-bills?label=Marketplace&logo=github&color=24292f)](https://github.com/marketplace/actions/post-no-bills-check) [![CI](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml/badge.svg)](https://github.com/stickerdaniel/post-no-bills/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Agents write the code, people sign it. Models are disclosed in the PR body.
 
