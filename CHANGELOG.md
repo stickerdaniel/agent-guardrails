@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A GitHub Marketplace icon: a white `slash` on dark gray
+
 ## [3.0.0] - 2026-10-05
 
 ### Changed
