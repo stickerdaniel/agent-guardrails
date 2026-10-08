@@ -26,3 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## Before 3.0.0
 
 Versions 1.0.0 to 2.2.0 were early releases and are no longer published. Their commits stay in the history of `main`. Before 2.2.0 the repository was `stickerdaniel/agent-guardrails`; `uses:` references to that name do not resolve.
+
+[Unreleased]: https://github.com/stickerdaniel/post-no-bills/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/stickerdaniel/post-no-bills/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/stickerdaniel/post-no-bills/releases/tag/v3.0.0

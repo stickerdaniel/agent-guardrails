@@ -11,7 +11,7 @@ body:
     attributes:
       label: Version
       description: The release tag and commit SHA in your `uses:` line
-      placeholder: v1.0.0 (0123456789abcdef0123456789abcdef01234567)
+      placeholder: vX.Y.Z (40-character commit SHA)
     validations:
       required: true
   - type: textarea

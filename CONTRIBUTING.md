@@ -27,7 +27,7 @@ docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -no-color
 
 Releases are lightweight `vX.Y.Z` tags on the current green `main` tip with an immutable GitHub release. A published version is never moved or reused; a fix ships as a new patch release. A removed or renamed input, a stricter default, or a new check that fails by default is a major version.
 
-Before tagging, ensure no merge is queued. Keep `main` and the new tag unchanged until the release workflow and its readback finish. Then verify that both still name the released commit and that the release is immutable. A mismatch stops delivery and requires investigation; the workflow's last ref check is not an atomic publication lock.
+Before tagging, move the Unreleased entries under `## [X.Y.Z] - YYYY-MM-DD` in CHANGELOG.md, add the version's compare link at the bottom, and ensure no merge is queued. Keep `main` and the new tag unchanged until the release workflow and its readback finish. Then verify that both still name the released commit and that the release is immutable. A mismatch stops delivery and requires investigation; the workflow's last ref check is not an atomic publication lock.
 
 GitHub offers no API to list a release on GitHub Marketplace. After the readback, open the release's edit page, select **Publish this Action to the GitHub Marketplace**, and update the release.
 
